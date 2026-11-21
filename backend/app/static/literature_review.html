@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文献工作台 · 人工校对</title>
+<style>
+  :root{
+    --bg:#0f1720; --panel:#17212b; --panel2:#1e2b38; --line:#2b3b4a;
+    --fg:#e6edf3; --muted:#93a4b5; --accent:#4aa8ff; --ok:#3fb950;
+    --warn:#d29922; --bad:#f85149; --radius:8px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  header{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+         padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);
+         position:sticky;top:0;z-index:10}
+  h1{font-size:16px;margin:0;font-weight:600}
+  h2{font-size:14px;margin:0 0 8px;font-weight:600;color:var(--fg)}
+  main{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:16px;align-items:start}
+  @media (max-width:1100px){main{grid-template-columns:1fr}}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+          padding:14px;margin-bottom:16px}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  input,textarea,select,button{font-family:inherit;font-size:13px}
+  input,textarea,select{width:100%;background:var(--panel2);color:var(--fg);
+        border:1px solid var(--line);border-radius:6px;padding:7px 9px}
+  textarea{resize:vertical;min-height:44px}
+  button{background:var(--accent);color:#04121f;border:0;border-radius:6px;
+         padding:7px 12px;cursor:pointer;font-weight:600}
+  button:hover{filter:brightness(1.1)}
+  button.ghost{background:transparent;color:var(--fg);border:1px solid var(--line);font-weight:500}
+  button.ok{background:var(--ok);color:#04121f}
+  button.bad{background:var(--bad);color:#fff}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap}
+  .row > *{flex:1}
+  .row > button{flex:0 0 auto}
+  .muted{color:var(--muted);font-size:12px}
+  .pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;
+        border:1px solid var(--line);color:var(--muted)}
+  .pill.pending{color:var(--warn);border-color:var(--warn)}
+  .pill.confirmed{color:var(--ok);border-color:var(--ok)}
+  .pill.rejected{color:var(--bad);border-color:var(--bad)}
+  .list{max-height:210px;overflow:auto;border:1px solid var(--line);border-radius:6px}
+  .item{padding:8px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+  .item:last-child{border-bottom:0}
+  .item:hover{background:var(--panel2)}
+  .item.active{background:var(--panel2);border-left:3px solid var(--accent)}
+  .grid5{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th,td{border-bottom:1px solid var(--line);padding:5px 6px;text-align:left;vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11px}
+  td input{background:transparent;border:1px solid transparent;padding:3px 4px}
+  td input:focus{background:var(--panel2);border-color:var(--line)}
+  .kp{display:flex;gap:8px;align-items:flex-start;padding:5px 0;border-bottom:1px dashed var(--line)}
+  .kp input[type=checkbox]{width:auto;margin-top:4px}
+  #graph{width:100%;height:430px;background:var(--panel2);border:1px solid var(--line);
+         border-radius:6px;display:block}
+  #toast{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:50}
+  .toast{padding:9px 14px;border-radius:6px;background:var(--panel2);
+         border-left:4px solid var(--accent);max-width:340px;font-size:13px;
+         box-shadow:0 6px 18px rgba(0,0,0,.4)}
+  .toast.ok{border-left-color:var(--ok)} .toast.bad{border-left-color:var(--bad)}
+  .stats{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin:8px 0}
+  .stats b{color:var(--fg)}
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+<header>
+  <h1>文献工作台 · 人工校对</h1>
+  <span class="muted" id="authState">未登录</span>
+  <span style="flex:1"></span>
+  <input id="user" placeholder="用户名" style="width:130px">
+  <input id="pass" type="password" placeholder="密码" style="width:130px">
+  <button id="loginBtn">登录</button>
+  <button id="registerBtn" class="ghost">注册</button>
+</header>
+
+<main>
+  <div>
+    <section>
+      <h2>1. PubMed 检索</h2>
+      <div class="row">
+        <input id="query" placeholder="如：aspirin COX-1 mechanism" value="aspirin randomized controlled trial">
+        <button id="searchBtn">检索</button>
+      </div>
+      <div class="muted" id="searchInfo" style="margin:8px 0"></div>
+      <div class="list" id="searchResults"></div>
+      <div class="row" style="margin-top:10px">
+        <input id="pmid" placeholder="或直接输入 PubMed ID，如 33301246">
+        <button id="extractBtn">抽取结构化摘要</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>2. 待校对草稿</h2>
+      <div class="row">
+        <select id="statusFilter">
+          <option value="pending">待校对 (pending)</option>
+          <option value="confirmed">已入库 (confirmed)</option>
+          <option value="rejected">已拒绝 (rejected)</option>
+          <option value="all">全部</option>
+        </select>
+        <button id="reloadReviews" class="ghost">刷新</button>
+      </div>
+      <div class="list" id="reviews" style="margin-top:10px"></div>
+    </section>
+
+    <section>
+      <h2>3. 人工校对</h2>
+      <div id="editorEmpty" class="muted">从上方选择一份草稿开始校对。AI 抽取结果不会自动入库。</div>
+      <div id="editor" class="hidden">
+        <div class="muted" id="editorMeta"></div>
+        <div class="grid5" style="margin:10px 0">
+          <div><label>P 人群</label><textarea id="f_population"></textarea></div>
+          <div><label>I 干预措施</label><textarea id="f_intervention"></textarea></div>
+          <div><label>C 对照</label><textarea id="f_comparator"></textarea></div>
+          <div><label>O 结局指标</label><textarea id="f_outcome"></textarea></div>
+          <div><label>D 研究设计</label><textarea id="f_design"></textarea></div>
+        </div>
+        <h2 style="margin-top:12px">实体关系（三元组）</h2>
+        <table>
+          <thead><tr><th style="width:32%">实体</th><th style="width:20%">关系</th>
+            <th style="width:32%">目标</th><th style="width:12%">置信度</th><th></th></tr></thead>
+          <tbody id="tripleBody"></tbody>
+        </table>
+        <button class="ghost" id="addTriple" style="margin-top:8px">+ 添加一条关系</button>
+
+        <h2 style="margin-top:14px">知识点（可一键转复习卡片）</h2>
+        <div id="kpList"></div>
+
+        <div class="row" style="margin-top:12px">
+          <input id="note" placeholder="校对备注（可选）">
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="saveBtn" class="ghost">保存校对</button>
+          <button id="confirmBtn" class="ok">确认入库</button>
+          <button id="cardsBtn">知识点转卡片</button>
+          <button id="rejectBtn" class="bad">拒绝</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div>
+    <section>
+      <h2>知识图谱（仅含已确认数据）</h2>
+      <div class="row">
+        <button id="graphBtn" class="ghost">刷新图谱</button>
+        <button class="ghost" data-export="json">导出 JSON</button>
+        <button class="ghost" data-export="graphml">导出 GraphML</button>
+        <button class="ghost" data-export="gexf">导出 GEXF</button>
+      </div>
+      <div class="stats" id="graphStats"></div>
+      <svg id="graph"></svg>
+      <div class="muted" style="margin-top:6px">拖动节点可查看结构；节点大小代表连接度。</div>
+    </section>
+
+    <section>
+      <h2>使用说明</h2>
+      <div class="muted">
+        <p><b>人工校对是硬性关卡</b>：抽取结果先进入 ChromaDB 草稿区，
+        <b>只有点击「确认入库」</b>才会写入 MySQL 的 <code>knowledge_graph</code> 表。</p>
+        <p>未配置 LLM 时，PICO-D 与三元组由本地规则抽取（
+        <span class="pill">无 Agent 降级模式</span>），结果需人工修正后再入库。</p>
+        <p>「知识点转卡片」会把选中的知识点写入复习系统，并按知识点打上章节标签。</p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const API = "/api/v1";
+let token = localStorage.getItem("pharm_token") || "";
+let current = null;          // 当前草稿
+let currentTriples = [];     // 当前三元组（可编辑）
+let currentKps = [];         // 当前知识点建议
+
+const $ = (id) => document.getElementById(id);
+
+function toast(msg, kind = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + kind;
+  el.textContent = msg;
+  $("toast").appendChild(el);
+  setTimeout(() => el.remove(), 4200);
+}
+
+async function api(path, { method = "GET", body = null, raw = false } = {}) {
+  const headers = {};
+  if (token) headers["Authorization"] = "Bearer " + token;
+  if (body !== null) headers["Content-Type"] = "application/json";
+  const res = await fetch(API + path, {
+    method, headers, body: body === null ? undefined : JSON.stringify(body),
+  });
+  if (res.status === 401) { toast("登录已过期，请重新登录", "bad"); throw new Error("unauthorized"); }
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const data = await res.json();
+      detail = data.message || data.detail || detail;
+      if (data.detail && data.detail.errors) detail = data.detail.errors.map(e => e.msg).join("; ");
+    } catch (e) {}
+    toast("请求失败：" + detail, "bad");
+    throw new Error(detail);
+  }
+  if (raw) return res;
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+/* ---------- 认证 ---------- */
+function setAuthState() {
+  $("authState").textContent = token ? "已登录（JWT 有效）" : "未登录";
+}
+async function login(register) {
+  const username = $("user").value.trim(), password = $("pass").value;
+  if (!username || !password) { toast("请输入用户名和密码", "bad"); return; }
+  try {
+    if (register) {
+      await api("/auth/register", { method: "POST", body: { username, password } });
+      toast("注册成功，正在登录…", "ok");
+    }
+    const data = await api("/auth/login", { method: "POST", body: { username, password } });
+    token = data.access_token;
+    localStorage.setItem("pharm_token", token);
+    setAuthState();
+    toast("登录成功", "ok");
+    loadReviews(); loadGraph();
+  } catch (e) { /* 已提示 */ }
+}
+$("loginBtn").onclick = () => login(false);
+$("registerBtn").onclick = () => login(true);
+
+/* ---------- PubMed 检索 ---------- */
+$("searchBtn").onclick = async () => {
+  const q = $("query").value.trim();
+  if (!q) return;
+  $("searchInfo").textContent = "检索中…";
+  try {
+    const data = await api("/literature/search?q=" + encodeURIComponent(q) + "&retmax=10");
+    $("searchInfo").textContent = `命中 ${data.total} 条，显示 ${data.items.length} 条`;
+    $("searchResults").innerHTML = data.items.map(a => `
+      <div class="item">
+        <div><b>${escapeHtml(a.title || "(无标题)")}</b></div>
+        <div class="muted">PMID ${a.pmid} · ${escapeHtml(a.journal || "")} ${a.year || ""}</div>
+        <button class="ghost" data-pmid="${a.pmid}" style="margin-top:6px">抽取这 ${a.pmid}</button>
+      </div>`).join("") || '<div class="item muted">没有结果</div>';
+    $("searchResults").querySelectorAll("button[data-pmid]").forEach(btn => {
+      btn.onclick = () => extract(btn.dataset.pmid);
+    });
+  } catch (e) { $("searchInfo").textContent = "检索失败"; }
+};
+
+$("extractBtn").onclick = () => extract($("pmid").value.trim());
+
+async function extract(pmid) {
+  if (!pmid) { toast("请输入 PMID", "bad"); return; }
+  toast("正在抓取并抽取 " + pmid + " …");
+  try {
+    const draft = await api("/literature/extract", { method: "POST", body: { pmid } });
+    toast(`抽取完成：来源 ${draft.extraction_source}，${draft.triples.length} 条关系。请人工校对后入库。`, "ok");
+    loadReviews();
+    openDraft(draft.draft_id);
+  } catch (e) {}
+}
+
+/* ---------- 草稿列表 ---------- */
+$("reloadReviews").onclick = loadReviews;
+$("statusFilter").onchange = loadReviews;
+
+async function loadReviews() {
+  if (!token) return;
+  try {
+    const data = await api("/literature/reviews?status=" + $("statusFilter").value);
+    $("reviews").innerHTML = data.items.map(d => `
+      <div class="item" data-id="${d.draft_id}">
+        <div><b>PMID ${d.pmid}</b> <span class="pill ${d.status}">${d.status}</span>
+          <span class="pill">${d.extraction_source}</span></div>
+        <div class="muted">${escapeHtml((d.article && d.article.title) || "").slice(0, 90)}</div>
+        <div class="muted">${d.triples.length} 条关系 · ${d.knowledge_points.length} 个知识点</div>
+      </div>`).join("") || '<div class="item muted">暂无草稿</div>';
+    $("reviews").querySelectorAll(".item[data-id]").forEach(el => {
+      el.onclick = () => openDraft(el.dataset.id);
+    });
+  } catch (e) {}
+}
+
+/* ---------- 校对编辑器 ---------- */
+async function openDraft(id) {
+  try {
+    const draft = await api("/literature/reviews/" + id);
+    current = draft;
+    currentTriples = draft.triples.map(t => ({ ...t }));
+    currentKps = draft.knowledge_points.map(k => ({ ...k }));
+
+    document.querySelectorAll("#reviews .item").forEach(el =>
+      el.classList.toggle("active", el.dataset.id === id));
+
+    $("editorEmpty").classList.add("hidden");
+    $("editor").classList.remove("hidden");
+    $("editorMeta").innerHTML =
+      `PMID ${draft.pmid} · 状态 <span class="pill ${draft.status}">${draft.status}</span> · ` +
+      `抽取来源 <b>${draft.extraction_source}</b>` +
+      (draft.fallback_reason ? ` · <span class="muted">降级原因：${escapeHtml(draft.fallback_reason)}</span>` : "");
+
+    const p = draft.pico_d || {};
+    ["population", "intervention", "comparator", "outcome", "design"].forEach(k => {
+      $("f_" + k).value = (p[k] && p[k].value) || "";
+    });
+    $("note").value = draft.note || "";
+    renderTriples(); renderKps();
+  } catch (e) {}
+}
+
+function renderTriples() {
+  $("tripleBody").innerHTML = currentTriples.map((t, i) => `
+    <tr>
+      <td><input data-i="${i}" data-k="entity" value="${escapeAttr(t.entity)}"></td>
+      <td><input data-i="${i}" data-k="relation" value="${escapeAttr(t.relation)}"></td>
+      <td><input data-i="${i}" data-k="target" value="${escapeAttr(t.target)}"></td>
+      <td><input data-i="${i}" data-k="confidence" value="${t.confidence ?? 0}"></td>
+      <td><button class="ghost" data-del="${i}">×</button></td>
+    </tr>`).join("") || '<tr><td colspan="5" class="muted">暂无关系</td></tr>';
+
+  $("tripleBody").querySelectorAll("input").forEach(inp => {
+    inp.onchange = () => {
+      const i = +inp.dataset.i, k = inp.dataset.k;
+      currentTriples[i][k] = (k === "confidence") ? parseFloat(inp.value) || 0 : inp.value;
+    };
+  });
+  $("tripleBody").querySelectorAll("button[data-del]").forEach(btn => {
+    btn.onclick = () => { currentTriples.splice(+btn.dataset.del, 1); renderTriples(); };
+  });
+}
+$("addTriple").onclick = () => {
+  currentTriples.push({ entity: "", relation: "干预", target: "", confidence: 0.5, evidence: "" });
+  renderTriples();
+};
+
+function renderKps() {
+  $("kpList").innerHTML = currentKps.map((k, i) => `
+    <div class="kp">
+      <input type="checkbox" data-kp="${i}" checked>
+      <div>
+        <div><b>${escapeHtml(k.knowledge_point)}</b>
+          <span class="pill">${(k.confidence ?? 0).toFixed(2)}</span></div>
+        <div class="muted">正面：${escapeHtml(k.front)}</div>
+        <div class="muted">背面：${escapeHtml(k.back).slice(0, 120)}</div>
+      </div>
+    </div>`).join("") || '<div class="muted">暂无知识点建议</div>';
+}
+
+function collectPico() {
+  const p = JSON.parse(JSON.stringify(current.pico_d || {}));
+  ["population", "intervention", "comparator", "outcome", "design"].forEach(k => {
+    p[k] = p[k] || {};
+    p[k].value = $("f_" + k).value.trim();
+  });
+  return p;
+}
+function collectTriples() {
+  return currentTriples
+    .filter(t => (t.entity || "").trim() && (t.relation || "").trim() && (t.target || "").trim())
+    .map(t => ({
+      entity: t.entity.trim(), relation: t.relation.trim(), target: t.target.trim(),
+      confidence: Number(t.confidence) || 0, evidence: t.evidence || "",
+    }));
+}
+
+$("saveBtn").onclick = async () => {
+  if (!current) return;
+  try {
+    await api("/literature/reviews/" + current.draft_id, {
+      method: "PATCH",
+      body: { pico_d: collectPico(), triples: collectTriples(), note: $("note").value },
+    });
+    toast("校对结果已保存（尚未入库）", "ok");
+    loadReviews();
+  } catch (e) {}
+};
+
+$("confirmBtn").onclick = async () => {
+  if (!current) return;
+  const triples = collectTriples();
+  if (!triples.length) { toast("至少需要一条完整的关系才能入库", "bad"); return; }
+  try {
+    const data = await api("/literature/reviews/" + current.draft_id + "/confirm", {
+      method: "POST", body: { triples },
+    });
+    toast(`已确认入库：新增 ${data.added} 条，跳过重复 ${data.skipped} 条`, "ok");
+    openDraft(current.draft_id); loadReviews(); loadGraph();
+  } catch (e) {}
+};
+
+$("rejectBtn").onclick = async () => {
+  if (!current) return;
+  try {
+    await api("/literature/reviews/" + current.draft_id + "/reject", {
+      method: "POST", body: { reason: $("note").value || "人工判定不可用" },
+    });
+    toast("已拒绝该草稿，未写入数据库", "ok");
+    openDraft(current.draft_id); loadReviews();
+  } catch (e) {}
+};
+
+$("cardsBtn").onclick = async () => {
+  if (!current) return;
+  const picked = [...document.querySelectorAll('#kpList input[type=checkbox]:checked')]
+    .map(cb => currentKps[+cb.dataset.kp].knowledge_point);
+  if (!picked.length) { toast("请至少勾选一个知识点", "bad"); return; }
+  try {
+    const data = await api("/literature/reviews/" + current.draft_id + "/to-cards", {
+      method: "POST", body: { knowledge_points: picked },
+    });
+    toast(`已生成 ${data.created} 张复习卡片（卡片 id：${data.card_ids.join(", ")}）`, "ok");
+  } catch (e) {}
+};
+
+/* ---------- 知识图谱可视化（纯 SVG 力导向，无外部依赖） ---------- */
+let graphData = { nodes: [], edges: [] };
+
+$("graphBtn").onclick = loadGraph;
+document.querySelectorAll("button[data-export]").forEach(btn => {
+  btn.onclick = async () => {
+    if (!token) { toast("请先登录", "bad"); return; }
+    const fmt = btn.dataset.export;
+    const res = await fetch(`${API}/literature/graph/export?fmt=${fmt}`,
+      { headers: { Authorization: "Bearer " + token } });
+    if (!res.ok) { toast("导出失败", "bad"); return; }
+    const blob = await res.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "knowledge_graph." + fmt;
+    a.click(); URL.revokeObjectURL(a.href);
+  };
+});
+
+async function loadGraph() {
+  if (!token) return;
+  try {
+    graphData = await api("/literature/graph");
+    const s = graphData.stats || {};
+    $("graphStats").innerHTML = `
+      <span>节点 <b>${s.node_count ?? 0}</b></span>
+      <span>关系 <b>${s.edge_count ?? 0}</b></span>
+      <span>密度 <b>${s.density ?? 0}</b></span>
+      <span>连通分量 <b>${s.component_count ?? 0}</b></span>
+      <span>关系类型 <b>${Object.keys(s.relation_counts || {}).length}</b></span>`;
+    drawGraph();
+  } catch (e) {}
+}
+
+function drawGraph() {
+  const svg = $("graph");
+  const W = svg.clientWidth || 600, H = svg.clientHeight || 430;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const nodes = graphData.nodes.map((n, i) => ({
+    ...n, x: W / 2 + Math.cos(i) * (60 + (i % 5) * 20),
+    y: H / 2 + Math.sin(i) * (60 + (i % 5) * 20), vx: 0, vy: 0,
+  }));
+  const index = new Map(nodes.map(n => [n.id, n]));
+  const edges = graphData.edges
+    .map(e => ({ ...e, s: index.get(e.source), t: index.get(e.target) }))
+    .filter(e => e.s && e.t);
+
+  // 力导向迭代（Fruchterman-Reingold 简化版）
+  for (let it = 0; it < 320; it++) {
+    const k = Math.sqrt((W * H) / Math.max(1, nodes.length)) * 0.42;
+    nodes.forEach(n => { n.vx = 0; n.vy = 0; });
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        let dx = a.x - b.x, dy = a.y - b.y;
+        let d = Math.hypot(dx, dy) || 0.01;
+        const f = (k * k) / d;
+        dx /= d; dy /= d;
+        a.vx += dx * f; a.vy += dy * f;
+        b.vx -= dx * f; b.vy -= dy * f;
+      }
+    }
+    edges.forEach(e => {
+      let dx = e.s.x - e.t.x, dy = e.s.y - e.t.y;
+      const d = Math.hypot(dx, dy) || 0.01;
+      const f = (d * d) / k;
+      dx /= d; dy /= d;
+      e.s.vx -= dx * f; e.s.vy -= dy * f;
+      e.t.vx += dx * f; e.t.vy += dy * f;
+    });
+    const cool = 1 - it / 340;
+    nodes.forEach(n => {
+      n.vx += (W / 2 - n.x) * 0.008;
+      n.vy += (H / 2 - n.y) * 0.008;
+      const len = Math.hypot(n.vx, n.vy) || 1;
+      const max = 12 * cool + 0.6;
+      n.x += (n.vx / len) * Math.min(len, max);
+      n.y += (n.vy / len) * Math.min(len, max);
+      n.x = Math.max(28, Math.min(W - 28, n.x));
+      n.y = Math.max(20, Math.min(H - 20, n.y));
+    });
+  }
+
+  const maxDeg = Math.max(1, ...nodes.map(n => n.degree));
+  const parts = [];
+  edges.forEach(e => {
+    parts.push(`<line x1="${e.s.x.toFixed(1)}" y1="${e.s.y.toFixed(1)}"
+      x2="${e.t.x.toFixed(1)}" y2="${e.t.y.toFixed(1)}"
+      stroke="#3d5266" stroke-width="${Math.min(3, 1 + e.weight * 0.4)}"/>`);
+  });
+  edges.forEach(e => {
+    parts.push(`<text x="${((e.s.x + e.t.x) / 2).toFixed(1)}" y="${((e.s.y + e.t.y) / 2).toFixed(1)}"
+      fill="#7d8fa1" font-size="9" text-anchor="middle">${escapeHtml(e.label).slice(0, 12)}</text>`);
+  });
+  nodes.forEach(n => {
+    const r = 6 + 16 * (n.degree / maxDeg);
+    parts.push(`<circle cx="${n.x.toFixed(1)}" cy="${n.y.toFixed(1)}" r="${r.toFixed(1)}"
+      fill="#2f6fa8" stroke="#6fb3f2" stroke-width="1.2"><title>${escapeAttr(n.label)}（连接度 ${n.degree}）</title></circle>`);
+    parts.push(`<text x="${n.x.toFixed(1)}" y="${(n.y + 3).toFixed(1)}"
+      fill="#e6edf3" font-size="10" text-anchor="middle">${escapeHtml(n.label).slice(0, 10)}</text>`);
+  });
+
+  svg.innerHTML = parts.join("") ||
+    `<text x="${W / 2}" y="${H / 2}" fill="#93a4b5" font-size="13" text-anchor="middle">
+       暂无已确认的知识图谱数据</text>`;
+}
+
+/* ---------- 工具 ---------- */
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+const escapeAttr = escapeHtml;
+
+setAuthState();
+if (token) { loadReviews(); loadGraph(); }
+window.addEventListener("resize", () => drawGraph());
+</script>
+</body>
+</html>

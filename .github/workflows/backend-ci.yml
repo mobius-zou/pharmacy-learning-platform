@@ -1,0 +1,78 @@
+name: backend-ci
+
+# 目的：把「本机能过」变成「任何环境都能复现的门禁」。
+# 审计 H8：仓库此前零提交、无 CI、ruff/mypy/bandit 均未安装。
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # CI 用独立测试库；conftest 会自动建库并拒绝与业务库同名
+      DATABASE_URL: mysql+pymysql://pharmacy:e2e@127.0.0.1:3306/pharmacy_db
+      JWT_SECRET_KEY: ci-only-secret-not-for-production
+      APP_ENV: ci
+      ST_ENABLED: "false"          # 不在 CI 下载 458MB 模型，语义测试自动降级
+      ST_WARMUP_ON_STARTUP: "false"
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: pharmacy
+          MYSQL_PASSWORD: e2e
+          MYSQL_DATABASE: pharmacy_db
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖（CPU 版 torch，避免拉取 CUDA 轮子）
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt \
+            --extra-index-url https://download.pytorch.org/whl/cpu
+
+      # 空库迁移测试：确保「新库 → alembic upgrade head」这条路始终可用
+      - name: 空库执行迁移
+        working-directory: backend
+        run: |
+          alembic upgrade head
+          alembic check
+
+      - name: 全量测试
+        working-directory: backend
+        run: pytest tests/ -q
+
+  lint:
+    runs-on: ubuntu-latest
+    # 这些工具此前未安装（审计 H8）。先以非阻塞方式引入，
+    # 待存量问题清理完再改为阻塞门禁。
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: ruff / mypy / bandit / pip-audit
+        working-directory: backend
+        run: |
+          python -m pip install ruff mypy bandit pip-audit
+          ruff check app
+          mypy app --ignore-missing-imports
+          bandit -r app -q
+          pip-audit -r requirements.txt
