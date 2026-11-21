@@ -1,0 +1,33 @@
+.env
+.env.local
+__pycache__/
+*.pyc
+venv/
+logs/
+node_modules/
+
+# 阶段三：ChromaDB 持久化目录（本地数据，不入库）
+chroma_db/
+
+# pip 临时目录/缓存（torch 体积大，需放在真实磁盘而非沙箱 tmpfs）
+.piptmp/
+.pipcache/
+
+# HuggingFace 模型缓存（本机无法直连 huggingface.co，走 hf-mirror 镜像）
+.hf_cache/
+
+# 工具缓存（不应入库）
+.cachebro/
+.omo/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 测试/验收脚本的落盘产物
+backend/logs/
+backend/chroma_db/
+*.tmp
+.env.*
+!.env.example
