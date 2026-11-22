@@ -81,26 +81,46 @@ def test_current_env_actually_has_a_stable_secret() -> None:
 # --- H2：.env 权限 ----------------------------------------------------------
 
 
-def test_env_permission_check_warns_but_never_reads(monkeypatch, caplog) -> None:
-    """权限检查只 stat 元数据；不读内容（项目约束：不得读取 .env）。"""
+def test_env_permission_check_warns_on_group_or_other_read(tmp_path, caplog) -> None:
+    """权限过宽（0644）时必须告警并给出 chmod 600 建议。
+
+    用临时文件注入路径，避免测试结果依赖本机 .env 的当前权限。
+    """
     import logging
+    import os
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("PLACEHOLDER=1\n", encoding="utf-8")
+    os.chmod(env_file, 0o644)
 
     with caplog.at_level(logging.WARNING):
-        app_main._check_env_permissions()
+        app_main._check_env_permissions(env_file)
 
-    # 当前 .env 是 644，应给出 chmod 600 的建议
     messages = [record.message for record in caplog.records]
     assert any("chmod 600" in message for message in messages), (
-        f".env 权限过宽时应告警，实际告警：{messages}"
+        f"0644 时应告警，实际告警：{messages}"
     )
+    # 只 stat，不应把内容读进日志
+    assert "PLACEHOLDER" not in caplog.text
 
 
-def test_env_permission_check_silent_when_missing(monkeypatch, tmp_path) -> None:
-    import app.main as module
+def test_env_permission_check_is_silent_when_owner_only(tmp_path, caplog) -> None:
+    """0600 时不应告警（已修复的状态不该继续刷警告）。"""
+    import logging
+    import os
 
-    monkeypatch.setattr(module, "__file__", str(tmp_path / "app" / "main.py"))
+    env_file = tmp_path / ".env"
+    env_file.write_text("PLACEHOLDER=1\n", encoding="utf-8")
+    os.chmod(env_file, 0o600)
 
-    module._check_env_permissions()  # 文件不存在 → 直接返回，不抛异常
+    with caplog.at_level(logging.WARNING):
+        app_main._check_env_permissions(env_file)
+
+    assert not [r for r in caplog.records if "chmod" in r.message]
+
+
+def test_env_permission_check_silent_when_missing(tmp_path) -> None:
+    app_main._check_env_permissions(tmp_path / "does-not-exist.env")  # 不存在 → 直接返回
 
 
 # --- H3：chunked 绕过 + 上传前置校验 ----------------------------------------

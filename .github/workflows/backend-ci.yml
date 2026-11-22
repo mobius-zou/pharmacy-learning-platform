@@ -37,7 +37,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # 与本机（开发机 3.14）保持一致：CI 若跑在更低版本上，
+          # 3.14 特有的语法/行为差异就永远测不出来。
+          python-version: "3.14"
           cache: pip
 
       - name: 安装依赖（CPU 版 torch，避免拉取 CUDA 轮子）
@@ -54,20 +56,29 @@ jobs:
           alembic upgrade head
           alembic check
 
+      # 语法门禁：不需要任何第三方 linter 就能拦住「根本无法导入」的提交
+      - name: 语法编译检查
+        working-directory: backend
+        run: python -m compileall -q app
+
       - name: 全量测试
         working-directory: backend
         run: pytest tests/ -q
 
-  lint:
+  lint-advisory:
+    # 【为什么是 advisory】仓库此前从未跑过 ruff/mypy/bandit（审计 H8），
+    # 存量告警数量未知。直接设为阻塞会让 CI 从第一天起就红灯，
+    # 反而促使别人绕过门禁。因此：
+    #   · 阻塞门禁放在 test job（语法编译 + 全量测试 + 空库迁移 + alembic check）；
+    #   · 本 job 只**报告**静态分析与依赖漏洞，持续可见但不阻断。
+    # 清理完存量后，把下面这行删掉即升级为阻塞。
     runs-on: ubuntu-latest
-    # 这些工具此前未安装（审计 H8）。先以非阻塞方式引入，
-    # 待存量问题清理完再改为阻塞门禁。
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.14"
       - name: ruff / mypy / bandit / pip-audit
         working-directory: backend
         run: |

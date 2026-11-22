@@ -23,12 +23,18 @@ cd backend
 
 # 1) 配置环境变量（.env 由你自己维护，不要提交到仓库）
 cp .env.example .env
-#    编辑 .env，至少填 DATABASE_URL 与 JWT_SECRET
+#    编辑 .env，至少填 DATABASE_URL 与 JWT_SECRET_KEY（也兼容 JWT_SECRET / SECRET_KEY）
 
-# 2) 建表（迁移为唯一入口）
+# 2) 安装依赖
+#    requirements.txt 锁定 torch==2.14.1+cpu（本地版本标识，只存在于 PyTorch 的 CPU 源），
+#    因此必须带该索引，否则会去 PyPI 拉数 GB 的 CUDA 轮子：
+./venv/bin/pip install -r requirements.txt \
+  --extra-index-url https://download.pytorch.org/whl/cpu
+
+# 3) 建表（迁移为唯一入口）
 ./venv/bin/alembic upgrade head
 
-# 3) 启动
+# 4) 启动（**单进程**，原因见下方「部署形态」）
 ./venv/bin/uvicorn app.main:app --reload
 
 # 文档： http://127.0.0.1:8000/docs
@@ -38,6 +44,19 @@ cp .env.example .env
 启动时**不会**自动建表：表结构以 Alembic 迁移为唯一入口，请先执行
 `./venv/bin/alembic upgrade head`（详见「数据库迁移」一节）。
 本地想恢复旧行为可设 `AUTO_CREATE_SCHEMA=true`，但不建议用于生产。
+
+### 部署形态：当前只支持单进程
+
+请**不要**用 `--workers N`（N>1）启动。有三个组件是**进程内单例**：
+
+| 组件 | 位置 | 多进程后果 |
+| --- | --- | --- |
+| 登录/注册限流计数器 | `app/ratelimit.py` | 实际阈值变成 `配置值 × worker 数`，限流被放大 |
+| 嵌入后端（sentence-transformers） | `app/embeddings.py` | 每个 worker 各加载一份模型，内存 × N（单份约 400MB+） |
+| ChromaDB 客户端 | `app/services/kg_service.py` | 同一持久化目录被多进程同时打开，可能导致锁冲突 |
+
+要支持多 worker，需要先把限流外置到 Redis、把模型放到独立推理服务。
+在此之前，单进程 + 反代（Nginx/Caddy）是受支持的部署方式。
 
 ## 目录结构
 
@@ -326,8 +345,10 @@ cd backend
 
 ### 关于数据库集成测试（隔离优先）
 
-**默认就是全量运行、0 跳过**：测试会自动派生并创建独立测试库
+**默认全量运行**：测试会自动派生并创建独立测试库
 ``<dbname>_test``（如 ``pharmacy_db_test``），全程不碰业务库。
+默认应为 0 跳过；**唯一**会跳过的是「仓库提交状态」那条断言——
+仓库尚无提交时它跳过并提示先提交（见「Git 基线」），提交后即通过。
 需要数据库账号有建库权限：
 
 ```sql

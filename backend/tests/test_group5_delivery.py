@@ -72,9 +72,17 @@ def test_ci_workflow_exists_and_runs_tests() -> None:
 
 
 def test_ci_blocks_on_failure() -> None:
-    """test job 不能是 continue-on-error，否则形同虚设。"""
+    """test job 不能是 continue-on-error，否则形同虚设。
+
+    按「下一个顶层 job 名」切分，而不是写死某个 job 名 ——
+    否则一旦重命名 lint job，这条断言就会静默失效。
+    """
+    import re
+
     content = (ROOT / ".github" / "workflows" / "backend-ci.yml").read_text(encoding="utf-8")
-    test_job = content.split("  test:")[1].split("  lint:")[0]
+    match = re.search(r"^  test:\n(.*?)(?=^  [A-Za-z][\w-]*:$)", content, re.S | re.M)
+    assert match is not None, "找不到 test job"
+    test_job = match.group(1)
 
     assert "continue-on-error" not in test_job
 

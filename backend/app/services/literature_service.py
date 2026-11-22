@@ -15,6 +15,7 @@ PICO-D 提取有两条路径：
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import urllib.error
@@ -137,9 +138,20 @@ class PubMedClient:
 
         url = f"{self.base_url}/{endpoint}?{urllib.parse.urlencode(query)}"
         request = urllib.request.Request(url, headers={"User-Agent": self.tool})
+        limit = settings.pubmed_max_response_bytes
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                return response.read().decode("utf-8", errors="replace")
+                # 有 Content-Length 时先判后读，避免白读一遍超大响应
+                declared = response.headers.get("Content-Length") if response.headers else None
+                if declared and declared.isdigit() and int(declared) > limit:
+                    raise PubMedError(
+                        f"PubMed 响应过大（声明 {declared} 字节，上限 {limit}）"
+                    )
+                # 多读 1 字节用于判断是否超限（审计 M16：原先 read() 无上限）
+                payload = response.read(limit + 1)
+                if len(payload) > limit:
+                    raise PubMedError(f"PubMed 响应超过上限 {limit} 字节")
+                return payload.decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             raise PubMedError(f"PubMed HTTP {exc.code}") from exc
         except Exception as exc:
@@ -173,7 +185,16 @@ class PubMedClient:
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
             raise PubMedError(f"PubMed 检索结果解析失败：{exc}") from exc
 
-        logger.info("PubMed 检索 %r 命中 %s 条，返回 %s 条", query, total, len(pmids))
+        # 检索词可能包含受试者信息或未公开课题名，日志里只留长度与短哈希，
+        # 既能关联重复检索，又不落明文（审计 M16）。
+        digest = hashlib.sha1(query.strip().encode("utf-8")).hexdigest()[:8]
+        logger.info(
+            "PubMed 检索（关键词 %d 字符，摘要 %s）命中 %s 条，返回 %s 条",
+            len(query.strip()),
+            digest,
+            total,
+            len(pmids),
+        )
         return pmids, total
 
     def fetch_many(self, pmids: Sequence[str]) -> list[Article]:

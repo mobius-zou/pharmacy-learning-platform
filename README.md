@@ -27,7 +27,7 @@ cp .env.example .env        # 填写 DATABASE_URL 与 JWT_SECRET_KEY
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 alembic upgrade head        # 建表（迁移是唯一入口）
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload   # 单进程；不要用 --workers>1，原因见 backend/README
 ```
 
 - API 文档：<http://127.0.0.1:8000/docs>
@@ -38,7 +38,8 @@ uvicorn app.main:app --reload
 
 ```bash
 cd backend
-pytest tests/ -q            # 默认使用独立 <dbname>_test，全量运行、0 跳过
+pytest tests/ -q            # 默认使用独立 <dbname>_test，全量运行
+                            # （唯一跳过项是「仓库提交状态」检查，提交后即通过）
 ```
 
 ## 文档

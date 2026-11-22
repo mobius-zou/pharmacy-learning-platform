@@ -43,7 +43,13 @@ networkx==3.7
 #   pip install --index-url https://download.pytorch.org/whl/cpu torch
 #   pip install sentence-transformers
 sentence-transformers==6.1.0
-# torch==2.14.1+cpu     # 由上面的 CPU 源安装，此处不锁版本以免与 CUDA 版冲突
+# 锁定 CPU 版 torch：不锁版本会让 pip 从 PyPI 拉到数 GB 的 CUDA 轮子。
+# 该版本在 CPython 3.12（CI）与 3.14（本机）都有 manylinux 轮子，
+# 已用 `pip install --dry-run --python-version 3.12` 实测过可解析。
+# 注意：`+cpu` 是本地版本标识，只能从 PyTorch 的 CPU 源获取，
+# 因此安装时必须带该索引（见 README「安装」）：
+#   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.14.1+cpu
 
 # 文件上传（PPT 截图 / 试卷照片 / txt 导入）需要 python-multipart
 python-multipart==0.0.32

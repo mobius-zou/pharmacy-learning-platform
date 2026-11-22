@@ -28,12 +28,13 @@ configure_logging()
 logger = get_logger(__name__)
 
 
-def _check_env_permissions() -> None:
+def _check_env_permissions(env_path: Path | None = None) -> None:
     """检查 .env 权限：只 stat 元数据，不读取内容（项目约束：不读 .env）。
 
     640/644 意味着同机其他本地用户可以读到数据库密码与 JWT 密钥。
+    ``env_path`` 仅供测试注入，运行时不传。
     """
-    env_file = Path(__file__).resolve().parent.parent / ".env"
+    env_file = env_path or (Path(__file__).resolve().parent.parent / ".env")
     try:
         mode = env_file.stat().st_mode
     except OSError:
@@ -158,14 +159,58 @@ async def health() -> dict:
     }
 
 
+# 校对页的 CSP：样式与脚本都已拆成外部静态文件，因此可以只放行 'self'。
+# 注意**只对本页**加，不要全局加 —— /docs 依赖 Swagger UI 的 CDN 资源。
+_UI_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self'; "
+    "img-src 'self' data:; "
+    "font-src 'self'; "
+    "connect-src 'self'; "
+    "object-src 'none'; "
+    "base-uri 'none'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
 @app.get("/ui/literature", include_in_schema=False)
 async def literature_ui() -> FileResponse:
-    """文献工作台的人工校对界面（自包含单页，无需构建步骤）。
+    """文献工作台的人工校对界面（零构建单页）。
 
-    阶段三要求「必须有人工校对界面」。这里用零依赖的静态页面实现，
-    后续可用 Vue 前端替换而不影响后端接口。
+    阶段三要求「必须有人工校对界面」。样式与脚本拆为独立静态文件，
+    以便对页面启用严格 CSP（禁止内联脚本/样式）。
     """
-    return FileResponse(STATIC_DIR / "literature_review.html", media_type="text/html")
+    return FileResponse(
+        STATIC_DIR / "literature_review.html",
+        media_type="text/html",
+        headers={
+            "Content-Security-Policy": _UI_CSP,
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+@app.get("/static/literature.css", include_in_schema=False)
+async def literature_css() -> FileResponse:
+    """校对页样式（零构建，浏览器可直接缓存）。"""
+    return FileResponse(
+        STATIC_DIR / "literature.css",
+        media_type="text/css",
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/static/literature.js", include_in_schema=False)
+async def literature_js() -> FileResponse:
+    """校对页脚本（零构建，浏览器可直接缓存）。"""
+    return FileResponse(
+        STATIC_DIR / "literature.js",
+        media_type="text/javascript",
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
 
 
 # 供测试/调试引用

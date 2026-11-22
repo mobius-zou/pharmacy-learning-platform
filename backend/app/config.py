@@ -146,6 +146,11 @@ class Settings:
         self.pubmed_email: str = os.getenv("PUBMED_EMAIL", "").strip()
         self.pubmed_tool: str = os.getenv("PUBMED_TOOL", "pharmacy-learning-platform").strip()
         self.pubmed_timeout_seconds: float = _env_float("PUBMED_TIMEOUT_SECONDS", 20.0)
+        # 单次 E-utilities 响应的字节上限：PubMed 正常情况下 efetch 只有几十 KB，
+        # 给 8MiB 足够宽裕，同时避免异常/恶意响应把内存吃满（审计 M16）。
+        self.pubmed_max_response_bytes: int = max(
+            1024, _env_int("PUBMED_MAX_RESPONSE_BYTES", 8 * 1024 * 1024)
+        )
 
         # 知识图谱抽取上限（防止 LLM 产出爆炸）
         self.kg_max_triples: int = max(1, _env_int("KG_MAX_TRIPLES", 80))
