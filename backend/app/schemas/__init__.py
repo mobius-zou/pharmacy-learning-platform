@@ -1,6 +1,6 @@
 """Pydantic 模型（请求/响应）。"""
 
-from .auth import LoginRequest, TokenResponse, UserCreate, UserOut
+from .auth import LoginRequest, SessionResponse, TokenResponse, UserCreate, UserOut
 from .card import (
     CardBulkCreateRequest,
     CardBulkCreateResponse,
@@ -153,6 +153,7 @@ __all__ = [
     "GradeResponse",
     "IncrementErrorRequest",
     "LoginRequest",
+    "SessionResponse",
     "PreviewOption",
     "QuestionAnalysisRequest",
     "QuestionAnalysisResponse",

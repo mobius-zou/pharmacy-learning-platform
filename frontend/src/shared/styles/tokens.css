@@ -1,0 +1,141 @@
+/* ===============================================================
+ * 设计令牌（Design Tokens）
+ * 药学视觉语言：低饱和药学蓝绿为主、暖沙为辅；
+ * 圆润（12–16px 圆角）、柔和阴影、克制的动效。
+ * 间距严格按 4 / 8 / 12 / 16 / 24 / 32 节奏。
+ * =============================================================== */
+
+:root {
+  /* 间距阶梯 —— 只用这 6 档 */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* 圆角阶梯 */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-pill: 999px;
+
+  /* 动效：只用于状态反馈 */
+  --t-fast: 160ms;
+  --t-base: 200ms;
+  --t-slow: 240ms;
+  --ease: cubic-bezier(0.2, 0.7, 0.3, 1);
+
+  /* 字号阶梯 */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 15px;
+  --fs-md: 17px;
+  --fs-lg: 21px;
+  --fs-xl: 27px;
+  --fs-2xl: 34px;
+
+  /* 布局 */
+  --nav-w: 232px;
+  --nav-w-collapsed: 76px;
+  --content-max: 1080px;
+}
+
+/* ------------------------------ 浅色主题 ------------------------------ */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f4f8f6;
+  --bg-veil: radial-gradient(1200px 620px at 8% -10%, #e4f1ee 0%, transparent 62%),
+    radial-gradient(900px 520px at 96% 0%, #eef3ea 0%, transparent 58%);
+  --surface: #ffffff;
+  --surface-2: #f2f7f5;
+  --surface-3: #e8f1ee;
+  --border: #d9e6e2;
+  --border-strong: #bcd3cd;
+
+  --fg: #16241f;
+  --fg-muted: #5b726b;
+  --fg-subtle: #5c7169; /* 对比度：white 5.22 / surface2 4.82 / surface3 4.54 */
+  --fg-on-primary: #ffffff;
+
+  --primary: #2f7d72;
+  --primary-hover: #276a60;
+  --primary-soft: #e3f1ee;
+  --primary-ring: rgba(47, 125, 114, 0.34);
+
+  --secondary: #a97f56;
+  --secondary-soft: #f6efe7;
+
+  --ok: #2f7d5b;
+  --ok-soft: #e5f2ea;
+  --warn: #8a6529; /* 对比度：white 5.28 / surface2 4.88 */
+  --warn-soft: #f7f0e2;
+  --danger: #a4544d;
+  --danger-soft: #f7eae8;
+  --info: #3f6f96;
+  --info-soft: #e8f0f6;
+
+  /* 掌握度色阶（mint → teal → blue → indigo） */
+  --mastery-1: #7fc9ba;
+  --mastery-2: #4a9e91;
+  --mastery-3: #4a7fa3;
+  --mastery-4: #5b6b9e;
+
+  --shadow-1: 0 1px 2px rgba(16, 45, 39, 0.04), 0 4px 14px rgba(16, 45, 39, 0.05);
+  --shadow-2: 0 2px 6px rgba(16, 45, 39, 0.05), 0 14px 38px rgba(16, 45, 39, 0.08);
+  --shadow-3: 0 8px 20px rgba(16, 45, 39, 0.08), 0 30px 70px rgba(16, 45, 39, 0.12);
+
+  --focus-ring: 0 0 0 3px var(--primary-ring);
+  --overlay: rgba(12, 28, 24, 0.42);
+}
+
+/* ------------------------------ 深色主题 ------------------------------ */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0b1512;
+  --bg-veil: radial-gradient(1200px 620px at 6% -12%, #123028 0%, transparent 60%),
+    radial-gradient(900px 520px at 98% -4%, #1a2a24 0%, transparent 56%);
+  --surface: #101d19;
+  --surface-2: #14241f;
+  --surface-3: #1a2e28;
+  --border: #24403a;
+  --border-strong: #33574f;
+
+  --fg: #e7f0ed;
+  --fg-muted: #a2b8b2;
+  --fg-subtle: #93aba4; /* 对比度：surface 7.10 / surface2 6.61 */
+  --fg-on-primary: #06201c;
+
+  --primary: #6cc0b2;
+  --primary-hover: #7fcec1;
+  --primary-soft: #16302b;
+  --primary-ring: rgba(108, 192, 178, 0.32);
+
+  --secondary: #d0a97f;
+  --secondary-soft: #2a2218;
+
+  --ok: #6cc39a;
+  --ok-soft: #142b22;
+  --warn: #d6b072;
+  --warn-soft: #2b2418;
+  --danger: #d98b82;
+  --danger-soft: #2c1c1a;
+  --info: #8ab3d4;
+  --info-soft: #16252f;
+
+  --mastery-1: #7fc9ba;
+  --mastery-2: #57b3a4;
+  --mastery-3: #6f9dc2;
+  --mastery-4: #8c9ccb;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 14px rgba(0, 0, 0, 0.34);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.36), 0 14px 38px rgba(0, 0, 0, 0.44);
+  --shadow-3: 0 8px 20px rgba(0, 0, 0, 0.4), 0 30px 70px rgba(0, 0, 0, 0.5);
+
+  --focus-ring: 0 0 0 3px var(--primary-ring);
+  --overlay: rgba(3, 10, 8, 0.62);
+}

@@ -50,3 +50,13 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int = Field(description="有效期（秒）")
     user: UserOut
+
+
+class SessionResponse(BaseModel):
+    """Cookie 会话登录的响应：只有用户信息，**不含 token**。
+
+    token 只存在于 HttpOnly Cookie 里，前端 JS 读不到 —— 这是把
+    「XSS 可窃取凭据」降到「XSS 只能冒用当前会话」的关键。
+    """
+
+    user: UserOut

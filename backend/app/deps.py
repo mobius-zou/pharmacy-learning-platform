@@ -12,6 +12,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .config import settings
 from .database import get_db
 from .errors import APIError, UnauthorizedError
 from .logging_config import get_logger
@@ -26,16 +27,34 @@ bearer_scheme = HTTPBearer(auto_error=False, description="Bearer <access_token>"
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def _extract_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> str | None:
+    """取访问令牌：Authorization 头优先，其次 HttpOnly Cookie。
+
+    两种方式并存是为了平滑迁移：
+    - 正式 SPA 用 Cookie（前端拿不到 token，XSS 无法窃取）；
+    - 既有的 /ui/literature 单页与测试脚本继续用 Bearer。
+    """
+    if credentials is not None and credentials.credentials:
+        return credentials.credentials
+    value = request.cookies.get(settings.cookie_name)
+    return value.strip() if value and value.strip() else None
+
+
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    """解析 Bearer token 并返回当前用户。"""
-    if credentials is None or not credentials.credentials:
+    """解析令牌并返回当前用户（Bearer 头或 HttpOnly Cookie）。"""
+    token = _extract_token(request, credentials)
+    if not token:
         raise UnauthorizedError("缺少访问令牌，请先登录")
 
     try:
-        payload = decode_access_token(credentials.credentials)
+        payload = decode_access_token(token)
     except TokenError as exc:
         raise UnauthorizedError(str(exc)) from exc
 

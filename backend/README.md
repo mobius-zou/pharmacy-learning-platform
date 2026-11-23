@@ -395,6 +395,30 @@ FLUSH PRIVILEGES;
 > 该行为已由 `tests/test_related_cards_match_mode.py` 锁定，
 > 避免以后有人误以为 `fallback` 等价于并集。
 
+## 认证与会话（Cookie / Bearer 双通道）
+
+正式前端使用 **HttpOnly Cookie** 承载登录态，后端同时保留 Bearer 以兼容
+`/ui/literature` 单页与测试脚本。两者由同一个校验函数处理，
+`Authorization` 头优先，缺失时回退 Cookie。
+
+| 端点 | 行为 |
+| --- | --- |
+| `POST /auth/register` | 创建用户（显式提交后再响应，保证「注册后立即登录」可见） |
+| `POST /auth/login` | 返回 `access_token`（兼容旧客户端）**并**写入 Cookie |
+| `POST /auth/session` | **只写 Cookie，响应体不含 token**（正式前端用这个） |
+| `GET /auth/me` | 支持 Cookie 或 Bearer |
+| `POST /auth/logout` | `token_version +1`（吊销全部令牌）+ 清除 Cookie |
+
+Cookie 属性：`HttpOnly`（JS 读不到）、`SameSite=Lax`（挡跨站 POST）、
+`Max-Age` 与令牌有效期一致；生产必须 `AUTH_COOKIE_SECURE=true` 且走 HTTPS。
+
+**CSRF 说明**：接口只接受 `application/json`，且 Cookie 为 `SameSite=Lax`
+（跨站 POST 不携带），因此常规表单型 CSRF 不成立。若将来支持跨站嵌入，
+需要额外加双重提交 token。
+
+**未实现**：忘记密码 / 重置密码（无对应端点）。若需要，建议
+`POST /auth/password/reset-request` + 邮件令牌方案，属新增功能。
+
 ## 安全与限流
 
 | 能力 | 说明 | 配置 |

@@ -31,3 +31,14 @@ backend/chroma_db/
 *.tmp
 .env.*
 !.env.example
+
+# npm 缓存（本机 ~/.npm 只读，需重定向到仓库内）
+.npmcache/
+
+# Playwright 浏览器与产物（本机 ~/.cache 只读，需重定向到仓库内）
+.playwright/
+frontend/test-results/
+frontend/playwright-report/
+
+# 前端构建产物（源码入库、产物不入库）
+frontend/dist/

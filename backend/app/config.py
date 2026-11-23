@@ -107,6 +107,15 @@ class Settings:
         self.fsrs_desired_retention: float = _env_float("FSRS_DESIRED_RETENTION", 0.9)
         self.fsrs_enable_fuzzing: bool = _env_bool("FSRS_ENABLE_FUZZING", True)
         self.fsrs_maximum_interval: int = _env_int("FSRS_MAXIMUM_INTERVAL", 36500)
+        # --- Cookie 认证（正式前端使用 HttpOnly Cookie 承载会话）---
+        # 前端不再把 token 放进 localStorage；Cookie 由浏览器自动携带。
+        # 生产必须 HTTPS + COOKIE_SECURE=true，否则本地 http 调试会收不到 Cookie。
+        self.cookie_name: str = os.getenv("AUTH_COOKIE_NAME", "pharm_session").strip() or "pharm_session"
+        self.cookie_secure: bool = _env_bool("AUTH_COOKIE_SECURE", False)
+        self.cookie_samesite: str = (
+            os.getenv("AUTH_COOKIE_SAMESITE", "lax").strip().lower() or "lax"
+        )
+        self.cookie_path: str = os.getenv("AUTH_COOKIE_PATH", "/").strip() or "/"
         # 幂等记录保留时长：客户端重发通常在秒级，24h 足够且不会让表无限增长
         self.idempotency_ttl_seconds: int = max(60, _env_int("IDEMPOTENCY_TTL_SECONDS", 86400))
         # 补录复习时间最多可提前多少天（防止伪造调度；日常复习留足余量）

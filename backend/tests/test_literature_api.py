@@ -467,6 +467,9 @@ def test_graph_delete_isolated_between_users(client, auth_headers, user_credenti
 
 
 def test_unauthorized_access_rejected(client, draft) -> None:
+    # `draft` fixture 已用同一个 client 登录过，Cookie 罐里有会话；
+    # 这里清掉 Cookie 来模拟「全新浏览器」，验证的仍是未认证请求会被拒绝。
+    client.cookies.clear()
     assert client.get(f"{LIT}/reviews").status_code == 401
     assert client.get(f"{LIT}/graph").status_code == 401
     assert client.post(f"{LIT}/extract", json={"pmid": "1"}).status_code == 401
