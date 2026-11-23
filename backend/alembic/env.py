@@ -51,6 +51,19 @@ def _database_url() -> str:
     return url
 
 
+
+# 表达式索引（MySQL 多值索引）无法被 autogenerate 渲染成 Index 对象，
+# 因此显式排除，避免 `alembic check` 误报「应删除该索引」。
+# 该索引由迁移 20261123_1218 通过 ALTER TABLE 创建，语义见该文件注释。
+_EXPRESSION_INDEXES = {"ix_cards_chapters_mv"}
+
+
+def _include_object(obj, name, type_, reflected, compare_to):  # noqa: ANN001
+    if type_ == "index" and name in _EXPRESSION_INDEXES:
+        return False
+    return True
+
+
 def run_migrations_offline() -> None:
     """离线模式：只生成 SQL，不连接数据库。"""
     context.configure(
@@ -60,6 +73,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         compare_server_default=True,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -83,6 +97,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             compare_server_default=True,
+            include_object=_include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

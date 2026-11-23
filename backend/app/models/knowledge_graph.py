@@ -63,7 +63,7 @@ def triple_fingerprint(entity: str, relation: str, target: str) -> str:
     import hashlib
 
     raw = f"{entity}|{relation}|{target}".encode("utf-8")
-    return hashlib.sha1(raw).hexdigest()
+    return hashlib.sha1(raw, usedforsecurity=False).hexdigest()
 
 
 @event.listens_for(KnowledgeGraph, "before_insert")

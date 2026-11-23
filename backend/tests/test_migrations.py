@@ -114,16 +114,13 @@ def test_migration_preserves_fk_cascade() -> None:
 
 
 def test_migration_creates_all_model_tables() -> None:
+    """每张模型表都必须由**某个**迁移创建（不限于基线迁移）。"""
     from app.database import Base
     from app import models  # noqa: F401
 
-    source = next(
-        p.read_text(encoding="utf-8")
-        for p in _migration_files()
-        if "create_table" in p.read_text(encoding="utf-8")
-    )
+    all_sources = "\n".join(p.read_text(encoding="utf-8") for p in _migration_files())
     for table in Base.metadata.tables:
-        assert f"create_table('{table}'" in source, f"迁移缺少表 {table}"
+        assert f"create_table('{table}'" in all_sources, f"没有任何迁移创建表 {table}"
 
 
 def test_migration_has_downgrade() -> None:
@@ -142,25 +139,30 @@ def test_migration_has_downgrade() -> None:
 
 @requires_db
 @pytest.mark.db
-def test_no_schema_drift_between_models_and_migrations() -> None:
+def test_no_schema_drift_between_models_and_migrations(db_engine) -> None:
     """``alembic check`` 必须报告没有待生成的变更。
 
     这是「迁移可用」的核心断言：模型改了但忘了写迁移，这里会立刻失败。
+
+    必须接收 ``db_engine``：它保证 schema 是**由迁移建出来**的。
+    直接 ``build_engine()`` 可能拿到「上个会话只删表、保留 stamp」的脏库，
+    那样比较结果会是一堆 add_table，断言失去意义。
     """
-    from alembic import command
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
 
-    from app.database import Base, build_engine
+    from app.database import Base
     from app import models  # noqa: F401
 
-    engine = build_engine()
-    try:
-        with engine.connect() as connection:
-            context = MigrationContext.configure(connection)
-            diff = compare_metadata(context, Base.metadata)
-    finally:
-        engine.dispose()
+    # 表达式索引（多值索引）无法被 autogenerate 渲染，与 alembic/env.py 保持一致地排除
+    def include_object(obj, name, type_, reflected, compare_to):  # noqa: ANN001
+        if type_ == "index" and name == "ix_cards_chapters_mv":
+            return False
+        return True
+
+    with db_engine.connect() as connection:
+        context = MigrationContext.configure(connection, opts={"include_object": include_object})
+        diff = compare_metadata(context, Base.metadata)
 
     assert diff == [], f"模型与迁移不一致，需要新增迁移：{diff}"
 

@@ -101,6 +101,10 @@ class ExamImportResponse(BaseModel):
     findings: list[ExamFindingOut] = Field(default_factory=list)
     inserted_to_queue: int = 0
     queue_skipped: int = 0
+    duplicates_skipped: int = Field(
+        default=0,
+        description="因与已有考点重复而未被新增（已合并）的条数",
+    )
     note: str = ""
 
 
@@ -166,6 +170,13 @@ class QueueInsertResponse(BaseModel):
 # --- OCR / 后端状态 ---------------------------------------------------------
 
 
+class OCRConcurrencyOut(BaseModel):
+    """OCR 并发闸门状态（前端据此提示「逐个上传」）。"""
+
+    max_concurrency: int = 1
+    waiting: int = 0
+
+
 class OCRStatusOut(BaseModel):
     backend: str
     available: bool
@@ -175,6 +186,7 @@ class OCRStatusOut(BaseModel):
     alternatives: list[str] = Field(default_factory=list)
     reason: str | None = None
     install_hint: str | None = None
+    concurrency: OCRConcurrencyOut = Field(default_factory=OCRConcurrencyOut)
 
 
 class EmbeddingStatusOut(BaseModel):
@@ -204,6 +216,7 @@ class OCRImportResponse(BaseModel):
     summary: PrioritySummaryOut
     findings: list[ExamFindingOut] = Field(default_factory=list)
     inserted_to_queue: int = 0
+    duplicates_skipped: int = 0
     note: str = ""
 
 

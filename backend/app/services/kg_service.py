@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..config import settings
+from ..embeddings import HASHING_BACKEND_ID, SPACE_LITERATURE
 from ..logging_config import get_logger
 from ..models import KnowledgeGraph
 from ..models.knowledge_graph import triple_fingerprint
@@ -38,11 +39,27 @@ from .literature_service import Article, PicoD
 
 logger = get_logger(__name__)
 
-# 草稿状态
+# 草稿状态机：
+#   pending ──人工确认──> indexing ──写库成功──> indexed
+#      └────人工拒绝────> rejected
+#
+# 为什么需要中间的 indexing：Chroma（草稿）与 MySQL（正式三元组）不在同一个
+# 事务里。若直接「写完库再改状态」，进程在两者之间崩溃就会留下
+# 「MySQL 已写入、草稿仍是 pending」的不一致状态，重试时无法判断该不该重放。
+# 先置 indexing 再写库，崩溃后扫描 indexing 重放即可（写库本身是幂等的）。
 DRAFT_PENDING = "pending"
-DRAFT_CONFIRMED = "confirmed"
+DRAFT_INDEXING = "indexing"
+DRAFT_INDEXED = "indexed"
 DRAFT_REJECTED = "rejected"
-DRAFT_STATUSES = (DRAFT_PENDING, DRAFT_CONFIRMED, DRAFT_REJECTED)
+DRAFT_STATUSES = (DRAFT_PENDING, DRAFT_INDEXING, DRAFT_INDEXED, DRAFT_REJECTED)
+
+# 历史草稿里存的是 "confirmed"（引入状态机之前）。读取时映射，写入时不再产生。
+LEGACY_DRAFT_STATUSES = {"confirmed": DRAFT_INDEXED}
+
+
+def normalize_draft_status(status: str) -> str:
+    """把历史状态名映射为当前状态机的值。"""
+    return LEGACY_DRAFT_STATUSES.get(status, status)
 
 # --- 关系词表（同时作为 LLMGraphTransformer 的 allowed_nodes/relationships）--
 
@@ -70,7 +87,9 @@ ALLOWED_RELATIONS: tuple[str, ...] = (
 
 def _hash_to_index(token: str, dim: int) -> int:
     """稳定的字符串 -> 桶索引（跨进程一致）。"""
-    digest = hashlib.md5(token.encode("utf-8")).hexdigest()
+    # 这是「字符串 -> 桶索引」的确定性散列，不用于任何安全用途；
+    # 显式标注 usedforsecurity=False 以免被静态扫描误判为弱加密。
+    digest = hashlib.md5(token.encode("utf-8"), usedforsecurity=False).hexdigest()
     return int(digest[:8], 16) % dim
 
 
@@ -176,7 +195,12 @@ def _embedding_signature() -> dict[str, Any]:
     一旦有人把其中一处换成另一套，已有集合的维度会对不上，Chroma 会直接报错
     或静默混用不同语义的向量。这里把标识写进集合元数据，切换时显式重建。
     """
-    return {"embedding_backend": "offline-hashing", "embedding_dim": settings.embedding_dim}
+    return {
+        "embedding_backend": HASHING_BACKEND_ID,
+        "embedding_dim": settings.embedding_dim,
+        # 空间标识：文献向量与考点匹配向量不可互相比较（见 app/embeddings.py）
+        "embedding_space": SPACE_LITERATURE,
+    }
 
 
 SIGNATURE_KEEP = "keep"
@@ -234,8 +258,12 @@ def _collection(name: str):
         if action == SIGNATURE_ADOPT:
             # 历史集合（引入签名之前创建）：一直就是这套离线哈希嵌入，
             # 只补写签名，**不删数据**，避免升级时白白丢失已索引的文献。
+            # hnsw:* 是创建期参数，modify() 不接受修改；只补写业务元数据
+            business = {
+                key: value for key, value in stored.items() if not key.startswith("hnsw:")
+            }
             try:
-                existing.modify(metadata={**stored, **signature})
+                existing.modify(metadata={**business, **signature})
                 logger.info("集合 %s 补写嵌入签名（保留原有 %d 条向量）", name, existing.count())
             except Exception:
                 logger.warning("集合 %s 补写签名失败，忽略（不影响检索）", name)
@@ -399,7 +427,7 @@ def _draft_from_record(record_id: str, metadata: dict[str, Any]) -> Draft:
         draft_id=record_id,
         user_id=int(metadata.get("user_id", 0)),
         pmid=str(metadata.get("pmid", "")),
-        status=str(metadata.get("status", DRAFT_PENDING)),
+        status=normalize_draft_status(str(metadata.get("status", DRAFT_PENDING))),
         payload=payload,
         created_at=str(metadata.get("created_at", "")),
         updated_at=str(metadata.get("updated_at", "")),
@@ -428,7 +456,17 @@ def list_drafts(
     """列出某用户的草稿（默认只看待校对）。"""
     where: dict[str, Any] = {"user_id": {"$eq": int(user_id)}}
     if status:
-        where = {"$and": [where, {"status": {"$eq": status}}]}
+        wanted = normalize_draft_status(status)
+        # 历史草稿存的是旧状态名，过滤时要把它们一起算进来
+        values = [wanted] + [
+            legacy for legacy, current in LEGACY_DRAFT_STATUSES.items() if current == wanted
+        ]
+        clause = (
+            {"status": {"$eq": values[0]}}
+            if len(values) == 1
+            else {"status": {"$in": values}}
+        )
+        where = {"$and": [where, clause]}
 
     result = draft_collection().get(where=where, limit=limit)
     ids = result.get("ids") or []
@@ -468,7 +506,10 @@ def update_draft(
 
 
 def set_draft_status(draft_id: str, user_id: int, status: str) -> Draft | None:
-    """更新草稿状态（pending / confirmed / rejected）。"""
+    """更新草稿状态（pending / indexing / indexed / rejected）。
+
+    只接受状态机里的值；历史名 ``confirmed`` 不再写入（读取时才映射）。
+    """
     if status not in DRAFT_STATUSES:
         raise ValueError(f"非法草稿状态：{status}")
 
@@ -483,6 +524,49 @@ def set_draft_status(draft_id: str, user_id: int, status: str) -> Draft | None:
     )
     logger.info("草稿状态更新 draft_id=%s status=%s", draft_id, status)
     return draft
+
+
+def recover_indexing_drafts(db: Session, limit: int = 100) -> int:
+    """扫描卡在 ``indexing`` 的草稿并重试写库，返回成功恢复的条数。
+
+    崩溃点只可能在「已置 indexing、尚未写完 MySQL」或
+    「MySQL 已写完、尚未置 indexed」之间，两种情况重放都安全：
+    ``confirm_triples`` 靠应用层去重 + ``(user_id, fingerprint)`` 唯一约束幂等。
+    """
+    result = draft_collection().get(where={"status": {"$eq": DRAFT_INDEXING}}, limit=limit)
+    ids = result.get("ids") or []
+    metadatas = result.get("metadatas") or []
+    recovered = 0
+    for index, draft_id in enumerate(ids):
+        metadata = metadatas[index] or {}
+        user_id = int(metadata.get("user_id") or 0)
+        if not user_id:
+            continue
+        draft = get_draft(draft_id, user_id)
+        if draft is None or not draft.payload:
+            continue
+        triples = draft.payload.get("triples") or []
+        if not triples:
+            # 没有可重放的载荷：置回 pending，交回人工处理
+            set_draft_status(draft_id, user_id, DRAFT_PENDING)
+            logger.warning("草稿 %s 卡在 indexing 且无可重放三元组，已退回 pending", draft_id)
+            continue
+        try:
+            confirm_triples(
+                db,
+                user_id,
+                triples,
+                source_type=draft.payload.get("source_type") or "pubmed",
+                source_id=str(draft.pmid),
+            )
+        except Exception:  # pragma: no cover - 单条失败不影响其余
+            logger.exception("重放草稿失败 draft_id=%s（保持 indexing 以便下次重试）", draft_id)
+            continue
+        set_draft_status(draft_id, user_id, DRAFT_INDEXED)
+        recovered += 1
+    if recovered:
+        logger.warning("已恢复 %d 份卡在 indexing 的草稿", recovered)
+    return recovered
 
 
 def delete_draft(draft_id: str, user_id: int) -> bool:

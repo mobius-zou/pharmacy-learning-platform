@@ -60,7 +60,8 @@
         <label for="statusFilter">状态筛选</label>
         <select id="statusFilter">
           <option value="pending">待校对 (pending)</option>
-          <option value="confirmed">已入库 (confirmed)</option>
+          <option value="indexing">入库中 (indexing)</option>
+          <option value="indexed">已入库 (indexed)</option>
           <option value="rejected">已拒绝 (rejected)</option>
           <option value="all">全部</option>
         </select>
@@ -169,6 +170,17 @@
     </div>
   </section>
 </main>
+
+<dialog id="confirmDialog" aria-labelledby="confirmTitle">
+  <form method="dialog">
+    <h2 id="confirmTitle">请确认</h2>
+    <p class="muted" id="confirmMessage"></p>
+    <div class="row mt-3">
+      <button class="ghost" type="submit" value="cancel">取消</button>
+      <button class="ok" type="submit" value="ok" id="confirmOk">确认</button>
+    </div>
+  </form>
+</dialog>
 
 <div id="toast" aria-live="polite" aria-atomic="false"></div>
 </body>

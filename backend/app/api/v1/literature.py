@@ -45,7 +45,13 @@ from ...schemas.literature import (
     TripleRecordOut,
 )
 from ...services import card_service, kg_service, literature_service as lit
-from ...services.kg_service import DRAFT_CONFIRMED, DRAFT_PENDING, DRAFT_REJECTED, Triple
+from ...services.kg_service import (
+    DRAFT_INDEXED,
+    DRAFT_INDEXING,
+    DRAFT_PENDING,
+    DRAFT_REJECTED,
+    Triple,
+)
 from ...tags import MAX_TAG_LENGTH
 
 logger = get_logger(__name__)
@@ -258,7 +264,10 @@ def extract_literature(
 @router.get("/reviews", response_model=DraftListResponse, summary="待校对草稿列表")
 @api_guard
 def list_reviews(
-    status: str = Query(DRAFT_PENDING, description="pending / confirmed / rejected；all 表示全部"),
+    status: str = Query(
+        DRAFT_PENDING,
+        description="pending / indexing / indexed / rejected；all 表示全部",
+    ),
     limit: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -341,20 +350,30 @@ def confirm_review(
         raise ValidationError("没有可入库的三元组：请先抽取或人工添加至少一条关系")
 
     source_id = payload.source_id or draft.pmid
-    created, skipped = kg_service.confirm_triples(
-        db,
-        current_user.id,
-        triples,
-        source_type=payload.source_type,
-        source_id=source_id,
-    )
 
-    kg_service.set_draft_status(draft_id, current_user.id, DRAFT_CONFIRMED)
+    # 状态机：先置 indexing 再写库。
+    # 崩溃点只可能落在 indexing 上，重启后扫描 indexing 重放即可（写库幂等），
+    # 不会出现「MySQL 已写、草稿仍 pending」导致重试判断不了的情况。
+    kg_service.set_draft_status(draft_id, current_user.id, DRAFT_INDEXING)
+    try:
+        created, skipped = kg_service.confirm_triples(
+            db,
+            current_user.id,
+            triples,
+            source_type=payload.source_type,
+            source_id=source_id,
+        )
+    except Exception:
+        # 保持 indexing，等待启动恢复流程重试
+        logger.exception("确认入库失败，草稿保持在 indexing 以便重试 draft_id=%s", draft_id)
+        raise
+
+    kg_service.set_draft_status(draft_id, current_user.id, DRAFT_INDEXED)
 
     graph = kg_service.build_graph(kg_service.fetch_triples(db, current_user.id))
     return ConfirmResponse(
         draft_id=draft_id,
-        status=DRAFT_CONFIRMED,
+        status=DRAFT_INDEXED,
         added=len(created),
         skipped=skipped,
         total_triples=len(triples),

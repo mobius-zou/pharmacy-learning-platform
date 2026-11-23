@@ -107,6 +107,8 @@ class Settings:
         self.fsrs_desired_retention: float = _env_float("FSRS_DESIRED_RETENTION", 0.9)
         self.fsrs_enable_fuzzing: bool = _env_bool("FSRS_ENABLE_FUZZING", True)
         self.fsrs_maximum_interval: int = _env_int("FSRS_MAXIMUM_INTERVAL", 36500)
+        # 幂等记录保留时长：客户端重发通常在秒级，24h 足够且不会让表无限增长
+        self.idempotency_ttl_seconds: int = max(60, _env_int("IDEMPOTENCY_TTL_SECONDS", 86400))
         # 补录复习时间最多可提前多少天（防止伪造调度；日常复习留足余量）
         self.review_max_future_days: int = max(0, _env_int("REVIEW_MAX_FUTURE_DAYS", 365))
 
@@ -163,6 +165,19 @@ class Settings:
         self.exam_match_min_score: float = _env_float("EXAM_MATCH_MIN_SCORE", 0.42)
         # 编辑距离初筛保留的候选数量（精筛只在这些候选上做）
         self.exam_match_prefilter_limit: int = max(1, _env_int("EXAM_MATCH_PREFILTER_LIMIT", 30))
+        # 卡片→知识点关联的匹配策略（H6 实测后的选择）：
+        #   never    —— 只按 chapters 标签成员匹配（走多值索引，最快，实测 5.7ms/2万卡）
+        #   fallback —— 先按标签精确匹配；无命中时回落到文本全表扫描（默认，兼顾覆盖率）
+        #   always   —— 始终做文本扫描的并集（旧行为，最慢，实测 32.7ms/2万卡）
+        self.related_cards_match_mode: str = (
+            os.getenv("RELATED_CARDS_MATCH_MODE", "fallback").strip().lower() or "fallback"
+        )
+        # OCR 并发上限：Tesseract 是**子进程**，并发过高会把 CPU 打满并拖慢所有请求。
+        # 超出上限的图片导入会短暂排队，排队超时则返回 503 + 重试建议。
+        self.ocr_max_concurrency: int = max(1, _env_int("OCR_MAX_CONCURRENCY", 2))
+        self.ocr_queue_timeout_seconds: float = max(
+            0.0, _env_float("OCR_QUEUE_TIMEOUT_SECONDS", 20.0)
+        )
         # 一次导入最多处理的考点数量
         self.exam_max_points_per_import: int = max(1, _env_int("EXAM_MAX_POINTS_PER_IMPORT", 200))
         # 一次批量录入的最多错题行数（防止单请求生成数万行 + 数百次 LLM 调用）

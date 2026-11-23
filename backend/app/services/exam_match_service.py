@@ -14,7 +14,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -160,6 +162,43 @@ def apply_synonyms(text: str) -> str:
     return _SYNONYM_PATTERN.sub(
         lambda match: _SYNONYM_LOOKUP.get(match.group(0), match.group(0)), lowered
     )
+
+
+def dedupe_key(text: str) -> str:
+    """考点判重键（**与匹配用的 ``normalize_text`` 不同**）。
+
+    规则严格按需求：NFKC 统一全半角 → 去首尾空白 → 统一小写 → 压缩连续空白。
+
+    刻意**不**做同义词替换与去标点：那是「语义匹配」的归一化，
+    而判重只回答「是否为同一条文本」。否则「阿司匹林 与 乙酰水杨酸」
+    会被误合并成一条考点。
+    """
+    normalized = unicodedata.normalize("NFKC", text or "")
+    return re.sub(r"\s+", " ", normalized.strip().lower())
+
+
+def dedupe_hash(text: str) -> str:
+    """判重键的 sha256（落库用）。
+
+    存哈希而不是原文：``point_text`` 是 TEXT，无法整列建唯一索引；
+    若截断前缀建索引，长文本会误判成同一条。
+    """
+    return hashlib.sha256(dedupe_key(text).encode("utf-8")).hexdigest()
+
+
+def dedupe_points(points: Sequence[str]) -> tuple[list[str], int]:
+    """批内去重（在**匹配之前**执行），返回 ``(保留的考点, 丢弃数)``。"""
+    seen: set[str] = set()
+    kept: list[str] = []
+    dropped = 0
+    for point in points:
+        key = dedupe_key(point)
+        if not key or key in seen:
+            dropped += 1
+            continue
+        seen.add(key)
+        kept.append(point)
+    return kept, dropped
 
 
 def normalize_text(text: str) -> str:
@@ -909,12 +948,31 @@ def import_exam_points(
     text: str,
     max_points: int | None = None,
     backend: EmbeddingBackend | None = None,
-) -> list[ExamFinding]:
-    """导入考点文本：切分 → 匹配 → 判定优先级 → 落库。"""
+) -> tuple[list[ExamFinding], int]:
+    """导入考点文本：切分 → **去重** → 匹配 → 判定优先级 → 落库/合并。
+
+    返回 ``(findings, duplicates_skipped)``；``duplicates_skipped`` 包含
+    批内重复与「命中库内已有行因而被合并」两类。
+    """
     limit = max_points or settings.exam_max_points_per_import
     points = split_exam_points(text, max_points=limit)
     if not points:
-        return []
+        return [], 0
+
+    # 去重必须发生在匹配/LLM **之前**：重复考点不该消耗嵌入计算，也不该多落一行
+    points, batch_duplicates = dedupe_points(points)
+    if not points:
+        return [], batch_duplicates
+
+    hashes = [dedupe_hash(point) for point in points]
+    existing = {
+        row.dedupe_hash: row
+        for row in db.execute(
+            select(ExamPoint).where(
+                ExamPoint.user_id == user_id, ExamPoint.dedupe_hash.in_(hashes)
+            )
+        ).scalars()
+    }
 
     matches, backend_name = _match_all_points(db, user_id, points, backend)
     # 一次预取全部掌握度证据（原先是每个考点各查一次，O(N) 全表扫描）
@@ -922,18 +980,33 @@ def import_exam_points(
         db, user_id, [m.knowledge_point for m in matches if m.matched]
     )
     findings: list[ExamFinding] = []
+    merged = 0
 
     for point_text, match in zip(points, matches):
         evidence, mastery, priority = evaluate_match(db, user_id, match, context)
-        record = ExamPoint(
-            user_id=user_id,
-            point_text=point_text,
-            matched_knowledge_point=match.knowledge_point or None,
-            priority=priority,
-            created_at=utcnow(),
-        )
-        db.add(record)
-        db.flush()
+        key = dedupe_hash(point_text)
+        record = existing.get(key)
+
+        if record is not None:
+            # 合并：同一考点重复导入时**不新增行**，只刷新匹配结果与优先级。
+            # created_at 保持首次导入时间，避免重复导入把记录顶到列表最前。
+            record.point_text = point_text
+            record.matched_knowledge_point = match.knowledge_point or None
+            record.priority = priority
+            db.flush()
+            merged += 1
+        else:
+            record = ExamPoint(
+                user_id=user_id,
+                point_text=point_text,
+                matched_knowledge_point=match.knowledge_point or None,
+                dedupe_hash=key,
+                priority=priority,
+                created_at=utcnow(),
+            )
+            db.add(record)
+            db.flush()
+            existing[key] = record
         findings.append(
             ExamFinding(
                 exam_point_id=record.id,
@@ -946,16 +1019,19 @@ def import_exam_points(
             )
         )
 
+    duplicates_skipped = batch_duplicates + merged
     logger.info(
-        "导入考点 user_id=%s 共 %d 条（高危 %d / 巩固 %d / 确认 %d），匹配后端=%s",
+        "导入考点 user_id=%s 共 %d 条（高危 %d / 巩固 %d / 确认 %d），"
+        "重复合并 %d 条，匹配后端=%s",
         user_id,
         len(findings),
         sum(1 for f in findings if f.priority == PRIORITY_HIGH),
         sum(1 for f in findings if f.priority == PRIORITY_CONSOLIDATE),
         sum(1 for f in findings if f.priority == PRIORITY_CONFIRM),
+        duplicates_skipped,
         backend_name,
     )
-    return sort_findings(findings)
+    return sort_findings(findings), duplicates_skipped
 
 
 def preview_matches(
@@ -964,7 +1040,7 @@ def preview_matches(
     text: str,
     max_points: int | None = None,
     backend: EmbeddingBackend | None = None,
-) -> list[ExamFinding]:
+) -> tuple[list[ExamFinding], int]:
     """试匹配：切分 + 匹配 + 判定优先级，但**不写入数据库**。
 
     用于「导入前预览」，也让使用者可以先确认匹配质量再决定是否入库。
@@ -972,7 +1048,12 @@ def preview_matches(
     limit = max_points or settings.exam_max_points_per_import
     points = split_exam_points(text, max_points=limit)
     if not points:
-        return []
+        return [], 0
+
+    # 与导入保持同一口径：重复考点不进匹配
+    points, batch_duplicates = dedupe_points(points)
+    if not points:
+        return [], batch_duplicates
 
     matches, _backend_name = _match_all_points(db, user_id, points, backend)
     context = build_mastery_context(
@@ -993,7 +1074,7 @@ def preview_matches(
                 reason=build_priority_reason(match.matched, mastery, evidence),
             )
         )
-    return sort_findings(findings)
+    return sort_findings(findings), batch_duplicates
 
 
 def list_exam_points(

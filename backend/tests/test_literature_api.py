@@ -142,7 +142,7 @@ def test_confirm_writes_triples_to_database(client, auth_headers, db_session, dr
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["status"] == "confirmed"
+    assert body["status"] == "indexed"
     assert body["added"] > 0
     assert body["source_id"] == "33301246"
 

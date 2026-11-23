@@ -26,6 +26,37 @@ from .logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# ============================ 向量空间边界 ============================
+# 本进程里存在**两个互不通用**的向量空间，禁止互相比较或混存：
+#
+#   SPACE_LITERATURE —— 文献向量库（ChromaDB ``literature`` 集合）
+#       固定使用离线哈希嵌入（HashingBackend，维度 = EMBEDDING_DIM，默认 256）。
+#       选择它的理由：不受网络/模型下载影响，跨进程与跨机器结果稳定，
+#       且文献检索只需要「大致的语义召回」，再由人工校对把关。
+#
+#   SPACE_EXAM_MATCH —— 阶段五考点匹配
+#       优先 sentence-transformers（paraphrase-multilingual-MiniLM-L12-v2，384 维），
+#       不可用时降级为同一个哈希实现，但**只在考点匹配内部**使用。
+#
+# 允许两套共存的代价是「同一文本在两处得到的向量不可相互比较」。
+# 因此本文件用常量把边界写死，并由 tests/test_embedding_boundary.py 断言：
+#   · 文献集合的嵌入签名永远不含 sentence-transformers；
+#   · 文献检索路径不会调用 resolve_backend()（即不会被 ST 悄悄接管）。
+# 统一为单一向量空间需要重算全部已入库向量，属于独立立项，不在本次范围。
+SPACE_LITERATURE = "literature-hashing-v1"
+SPACE_EXAM_MATCH = "exam-match-semantic-v1"
+
+# 文献集合元数据里持久化的后端标识。
+# 注意它与 HashingBackend.name（"hashing-offline"）不同：这个值是**已落盘**的
+# 历史标识，改动它会让所有已建集合被判为「签名变化」而重建，因此保持稳定。
+HASHING_BACKEND_ID = "offline-hashing"
+
+# 每个空间允许出现的嵌入后端名
+LITERATURE_ALLOWED_BACKENDS: frozenset[str] = frozenset({HASHING_BACKEND_ID})
+EXAM_MATCH_ALLOWED_BACKENDS: frozenset[str] = frozenset(
+    {"hashing-offline", "sentence-transformers"}
+)
+
 
 def _prepare_huggingface_env() -> None:
     """在导入 transformers 之前配置镜像与缓存目录。

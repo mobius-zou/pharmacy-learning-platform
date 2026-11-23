@@ -55,6 +55,54 @@ function skeletonState(rows = 3) {
 }
 
 /**
+ * 确认弹窗：用于**有副作用且不易撤销**的操作（确认入库 / 拒绝 / 转卡片）。
+ * 解决误触 —— 原生 <dialog> 自带焦点捕获与 Esc 取消，无需第三方库。
+ */
+function confirmAction(message, { okText = "确认", danger = false } = {}) {
+  const dialog = $("confirmDialog");
+  const okBtn = $("confirmOk");
+  $("confirmMessage").textContent = message;
+  okBtn.textContent = okText;
+  okBtn.className = danger ? "bad" : "ok";
+
+  return new Promise((resolve) => {
+    const onClose = () => {
+      dialog.removeEventListener("close", onClose);
+      resolve(dialog.returnValue === "ok");
+    };
+    dialog.addEventListener("close", onClose);
+    dialog.returnValue = "";
+    dialog.showModal();
+  });
+}
+
+/**
+ * 幂等键：同一个「逻辑请求」在重试时必须复用同一个键。
+ *
+ * 目的：网络超时后用户再点一次 → 服务端识别为同一次操作，不会重复推进 FSRS。
+ * 实现：按「方法+路径+请求体」记住键，**成功后清除**；
+ * 失败（含超时）时保留，于是下一次点击复用旧键。
+ */
+const pendingIdempotencyKeys = new Map();
+
+function idempotencyKeyFor(method, path, body) {
+  const fingerprint = `${method} ${path} ${JSON.stringify(body ?? null)}`;
+  const existing = pendingIdempotencyKeys.get(fingerprint);
+  if (existing) return { fingerprint, key: existing };
+
+  const key =
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  pendingIdempotencyKeys.set(fingerprint, key);
+  return { fingerprint, key };
+}
+
+function forgetIdempotencyKey(fingerprint) {
+  pendingIdempotencyKeys.delete(fingerprint);
+}
+
+/**
  * 请求中锁定按钮：防双击重复提交。
  * 用 dataset.busy 做同步判重（disabled 在回填前仍可能被第二次点击命中）。
  */
@@ -116,6 +164,11 @@ async function api(path, { method = "GET", body = null, raw = false } = {}) {
   if (token) headers["Authorization"] = "Bearer " + token;
   if (body !== null) headers["Content-Type"] = "application/json";
 
+  // 写请求带幂等键：重试复用旧键，避免「超时重发」产生第二次副作用
+  const isWrite = method !== "GET";
+  const idem = isWrite ? idempotencyKeyFor(method, path, body) : null;
+  if (idem) headers["Idempotency-Key"] = idem.key;
+
   const res = await fetch(API + path, {
     method,
     headers,
@@ -145,6 +198,9 @@ async function api(path, { method = "GET", body = null, raw = false } = {}) {
     toast("请求失败：" + detail, "bad");
     throw new Error(detail);
   }
+
+  // 服务端已确认成功：清掉该操作的幂等键，下一次是新操作
+  if (idem) forgetIdempotencyKey(idem.fingerprint);
 
   if (raw) return res;
   if (res.status === 204) return null;
@@ -407,6 +463,11 @@ async function confirmDraft(btn) {
     toast("至少需要一条完整的关系才能入库", "bad");
     return;
   }
+  const ok = await confirmAction(
+    `确认把这份草稿（${triples.length} 条关系）写入知识图谱？入库后需另行撤销。`,
+    { okText: "确认入库" },
+  );
+  if (!ok) return;
   await withBusy(btn, async () => {
     try {
       const data = await api(
@@ -422,6 +483,11 @@ async function confirmDraft(btn) {
 
 async function rejectDraft(btn) {
   if (!current) return;
+  const ok = await confirmAction("确认拒绝这份草稿？拒绝后不会有任何数据入库。", {
+    okText: "确认拒绝",
+    danger: true,
+  });
+  if (!ok) return;
   await withBusy(btn, async () => {
     try {
       await api("/literature/reviews/" + encodeURIComponent(current.draft_id) + "/reject", {
@@ -443,6 +509,11 @@ async function toCards(btn) {
     toast("请至少勾选一个知识点", "bad");
     return;
   }
+  const ok = await confirmAction(
+    `把选中的 ${picked.length} 个知识点转成复习卡片？它们会立即进入复习队列。`,
+    { okText: "转成卡片" },
+  );
+  if (!ok) return;
   await withBusy(btn, async () => {
     try {
       const data = await api(

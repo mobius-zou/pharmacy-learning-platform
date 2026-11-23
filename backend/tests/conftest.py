@@ -278,7 +278,12 @@ def db_engine():
                 for table in reversed(Base.metadata.sorted_tables):
                     conn.execute(delete(table))
         else:
+            # 连同迁移版本表一起删除：只删应用表会留下「已 stamp 到 head」
+            # 的脏状态，下一轮 upgrade head 会空转，schema 根本不会建出来。
+            from app.database import _alembic_version_table
+
             Base.metadata.drop_all(bind=engine)
+            _alembic_version_table().drop(bind=engine, checkfirst=True)
         engine.dispose()
 
 

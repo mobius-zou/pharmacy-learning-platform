@@ -1,7 +1,12 @@
 """考点模型（阶段五：考点匹配）。
 
-字段严格遵循既定数据模型：id, user_id, point_text, matched_knowledge_point,
-priority, created_at —— 本阶段**未新增任何列**。
+字段在既定数据模型（id, user_id, point_text, matched_knowledge_point,
+priority, created_at）基础上新增 ``dedupe_hash``：
+
+同一条考点被重复导入时不应产生第二行，而应**合并**到已有行。
+判重键的规范化规则（去首尾空白 / NFKC 全半角统一 / 小写 / 压缩空白）放在
+``exam_match_service.dedupe_key``；落库只存它的 sha256，避免用长文本建唯一索引
+（``TEXT`` 无法整列索引，而截断前缀会造成误合并）。
 
 ``priority`` 取值：``高危`` / ``巩固`` / ``确认``。
 ``matched_knowledge_point`` 在知识图谱中找不到对应知识点时为空。
@@ -12,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Integer, String, Text
+from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -39,7 +44,11 @@ PRIORITY_ORDER: dict[str, int] = {
 
 class ExamPoint(Base):
     __tablename__ = "exam_points"
-    __table_args__ = MYSQL_TABLE_ARGS
+    __table_args__ = (
+        # 同一用户的同一条考点只能有一行（并发导入也不会重复）
+        UniqueConstraint("user_id", "dedupe_hash", name="uq_exam_points_user_dedupe"),
+        MYSQL_TABLE_ARGS,
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(
@@ -51,6 +60,8 @@ class ExamPoint(Base):
     matched_knowledge_point: Mapped[str | None] = mapped_column(
         String(200), nullable=True, index=True
     )
+    # 判重键：normalize 后文本的 sha256（64 位十六进制）
+    dedupe_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     # 复习优先级：高危 / 巩固 / 确认
     priority: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(

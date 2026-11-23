@@ -106,12 +106,15 @@ def _import_text(
     text: str,
     max_points: int | None,
     auto_insert: bool,
-) -> tuple[list[exam_service.ExamFinding], int, int]:
-    findings = exam_service.import_exam_points(db, user_id, text, max_points=max_points)
+) -> tuple[list[exam_service.ExamFinding], int, int, int]:
+    """返回 (findings, 插入队列数, 入队跳过数, 重复合并数)。"""
+    findings, duplicates_skipped = exam_service.import_exam_points(
+        db, user_id, text, max_points=max_points
+    )
     inserted = skipped = 0
     if auto_insert and findings:
         inserted, skipped = _auto_insert_high_risk(db, user_id, findings)
-    return findings, inserted, skipped
+    return findings, inserted, skipped, duplicates_skipped
 
 
 # --- 能力与状态（必须声明在 /{exam_point_id} 之前） -------------------------
@@ -153,7 +156,7 @@ def match_exam_points(
     current_user: User = Depends(get_current_user),
 ) -> ExamImportResponse:
     """先看匹配质量：切分 + 匹配 + 优先级判定，但不写入数据库。"""
-    findings = exam_service.preview_matches(
+    findings, duplicates_skipped = exam_service.preview_matches(
         db, current_user.id, payload.text, max_points=payload.max_points
     )
     embedding = describe_embedding()
@@ -164,6 +167,7 @@ def match_exam_points(
         degraded=bool(embedding["degraded"]),
         summary=_summary_out(db, current_user.id),
         findings=[_finding_out(f) for f in findings],
+        duplicates_skipped=duplicates_skipped,
         note="试匹配结果未写入数据库",
     )
 
@@ -188,7 +192,7 @@ def import_exam_points(
     匹配同时按验收标准 2 分好 高危 / 巩固 / 确认 三级；
     默认把高危考点自动插入复习队列（验收标准 3）。
     """
-    findings, inserted, skipped = _import_text(
+    findings, inserted, skipped, duplicates_skipped = _import_text(
         db,
         current_user.id,
         payload.text,
@@ -200,10 +204,11 @@ def import_exam_points(
 
     embedding = describe_embedding()
     logger.info(
-        "考点导入完成 user_id=%s 共 %d 条，插入队列 %d 条",
+        "考点导入完成 user_id=%s 共 %d 条，插入队列 %d 条，重复合并 %d 条",
         current_user.id,
         len(findings),
         inserted,
+        duplicates_skipped,
     )
     return ExamImportResponse(
         imported=len(findings),
@@ -214,6 +219,7 @@ def import_exam_points(
         findings=[_finding_out(f) for f in findings],
         inserted_to_queue=inserted,
         queue_skipped=skipped,
+        duplicates_skipped=duplicates_skipped,
         note=_queue_note(inserted, skipped) if payload.auto_insert_high_risk else "未自动插入复习队列",
     )
 
@@ -250,7 +256,7 @@ async def import_from_file(
 
     text = _decode_text_file(raw)
     # _import_text 里是同步 DB + 嵌入模型调用，直接跑在事件循环上会阻塞所有请求
-    findings, inserted, skipped = await run_in_threadpool(
+    findings, inserted, skipped, duplicates_skipped = await run_in_threadpool(
         _import_text, db, current_user.id, text, max_points, auto_insert_high_risk
     )
     if not findings:
@@ -266,6 +272,7 @@ async def import_from_file(
         findings=[_finding_out(f) for f in findings],
         inserted_to_queue=inserted,
         queue_skipped=skipped,
+        duplicates_skipped=duplicates_skipped,
         note=f"来源文件：{file.filename}",
     )
 
@@ -302,6 +309,19 @@ async def import_from_image(
     )
     if not result.ok:
         status_info = ocr_module.ocr_status()
+        if result.busy:
+            # 繁忙是**服务端**暂时的资源限制，用 503 + retry_after 表达，
+            # 让客户端知道「稍后重试」而不是「图片有问题」。
+            raise APIError(
+                result.error or "OCR 繁忙，请稍后重试",
+                status_code=503,
+                error="ocr_busy",
+                detail={
+                    "retry_after": settings.ocr_queue_timeout_seconds,
+                    "concurrency": status_info.get("concurrency"),
+                    "alternatives": status_info.get("alternatives", []),
+                },
+            )
         if not status_info.get("available"):
             raise APIError(
                 "OCR 引擎不可用，无法识别图片",
@@ -318,7 +338,7 @@ async def import_from_image(
     if not result.text.strip():
         raise ValidationError("OCR 未能从图片中识别出文字，请上传更清晰的图片")
 
-    findings, inserted, _skipped = await run_in_threadpool(
+    findings, inserted, _skipped, duplicates_skipped = await run_in_threadpool(
         _import_text, db, current_user.id, result.text, max_points, auto_insert_high_risk
     )
     return OCRImportResponse(
@@ -329,6 +349,7 @@ async def import_from_image(
         summary=_summary_out(db, current_user.id),
         findings=[_finding_out(f) for f in findings],
         inserted_to_queue=inserted,
+        duplicates_skipped=duplicates_skipped,
         note=f"来源图片：{file.filename}" if file.filename else "",
     )
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -515,52 +516,52 @@ def analyze_question(
 # --- DB 层：知识点与卡片自动关联 --------------------------------------------
 
 
-def related_card_ids(
-    db: Session, user_id: int, knowledge_points: Sequence[str]
-) -> set[int]:
-    """找出与给定知识点关联的卡片 id。
+def _exact_tag_condition(point: str):
+    """标签成员匹配（走生成列上的多值索引）。
 
-    关联规则（任一命中即关联）：
-    1. 卡片三维度标签中**精确包含**该知识点（``JSON_CONTAINS``）；
-    2. 卡片标签的 JSON 文本**模糊包含**该知识点（覆盖「知识点包含章节名」的情况）；
-    3. 卡片正面/背面正文模糊包含该知识点。
+    ``Card.chapters_json`` 是 ``tags.chapters`` 的生成列；对它做
+    ``JSON_CONTAINS`` 才能命中多值索引（实测 5.7ms vs 32.7ms / 2 万张卡）。
     """
-    points = [normalize_knowledge_point(p) for p in knowledge_points]
-    points = [p for p in points if p]
-    if not points:
-        return set()
+    return func.json_contains(Card.chapters_json, json.dumps(point, ensure_ascii=False))
 
-    conditions = []
-    for point in points:
-        # 转义 %/_：否则知识点里出现 % 会匹配全部卡片，制造假薄弱点并全表扫描
-        pattern, escape = like_contains(point)
-        conditions.append(Card.front.ilike(pattern, escape=escape))
-        conditions.append(Card.back.ilike(pattern, escape=escape))
-        for key in (KEY_SUBJECTS, KEY_CHAPTERS, KEY_POINT_TYPES):
-            conditions.append(
-                func.json_contains(Card.tags[key], json.dumps(point, ensure_ascii=False))
-            )
-            conditions.append(cast(Card.tags[key], String).ilike(pattern, escape=escape))
 
-    stmt = select(Card.id).where(Card.user_id == user_id, or_(*conditions))
-    return set(db.execute(stmt).scalars().all())
+def _fuzzy_conditions(point: str) -> list:
+    """旧的文本 / JSON 文本模糊匹配（全表扫描，仅在回落模式下使用）。"""
+    pattern, escape = like_contains(point)
+    conditions = [
+        Card.front.ilike(pattern, escape=escape),
+        Card.back.ilike(pattern, escape=escape),
+    ]
+    for key in (KEY_SUBJECTS, KEY_CHAPTERS, KEY_POINT_TYPES):
+        conditions.append(
+            func.json_contains(Card.tags[key], json.dumps(point, ensure_ascii=False))
+        )
+        conditions.append(cast(Card.tags[key], String).ilike(pattern, escape=escape))
+    return conditions
 
 
 def _card_matches_point(
-    front: str, back: str, tags: Any, point: str
+    front: str, back: str, tags: Any, point: str, *, fuzzy: bool = False
 ) -> bool:
-    """与 SQL 关联规则等价的**内存判定**（用于一次查询后按知识点归属）。
+    """与 SQL 谓词等价的**内存判定**（一次查询后按知识点归属）。
 
-    规则与 ``related_card_ids`` 保持一致：
-    标签精确包含 / 标签 JSON 文本模糊包含 / 正反面正文模糊包含。
+    ``fuzzy=False`` 时只认 ``chapters`` 标签的精确成员，与
+    ``_exact_tag_condition`` 对应；``fuzzy=True`` 时额外镜像文本匹配。
     """
     if not point:
         return False
+    if not isinstance(tags, dict):
+        return False
+
+    chapters = tags.get(KEY_CHAPTERS)
+    if isinstance(chapters, list) and point in chapters:
+        return True
+    if not fuzzy:
+        return False
+
     lowered = point.lower()
     if lowered in (front or "").lower() or lowered in (back or "").lower():
         return True
-    if not isinstance(tags, dict):
-        return False
     for key in (KEY_SUBJECTS, KEY_CHAPTERS, KEY_POINT_TYPES):
         value = tags.get(key)
         if isinstance(value, list) and point in value:
@@ -570,44 +571,79 @@ def _card_matches_point(
     return False
 
 
+def related_card_ids(
+    db: Session, user_id: int, knowledge_points: Sequence[str]
+) -> set[int]:
+    """找出与给定知识点关联的卡片 id（多个知识点取并集）。
+
+    委托给 :func:`related_card_ids_bulk`，保证单点与批量走**同一套**匹配策略，
+    避免两条路径的语义漂移。
+    """
+    mapping = related_card_ids_bulk(db, user_id, knowledge_points)
+    merged: set[int] = set()
+    for ids in mapping.values():
+        merged.update(ids)
+    return merged
+
+
 def related_card_ids_bulk(
     db: Session, user_id: int, knowledge_points: Sequence[str]
 ) -> dict[str, set[int]]:
-    """一次查询，按知识点分别给出关联卡片 id。
+    """按知识点分别给出关联卡片 id，返回 ``{知识点: {卡片 id, ...}}``。
 
-    原先的写法是对每个知识点各跑一次 ``related_card_ids``（N 次全表扫描）。
-    这里把并集用**一次** OR 查询取回，再在内存里归属到各知识点。
+    匹配策略由 ``settings.related_cards_match_mode`` 决定（H6 实测后确定）：
 
-    返回 ``{知识点: {卡片 id, ...}}``。
+    - ``never``    —— 只按 ``chapters`` 标签做**成员匹配**，命中生成列上的多值索引
+      （2 万张卡片实测 5.7ms）；
+    - ``fallback`` —— 先做上面的精确匹配；**只有完全没命中**时才回落到旧的
+      文本/JSON 模糊扫描（2 万卡实测 32.7ms），兼顾手写卡片的覆盖率；
+    - ``always``   —— 始终取两者并集（旧行为，最慢）。
+
+    为什么不再默认走并集：文本 ``LIKE '%…%'`` 无法使用索引，会把每次匹配变成
+    全表扫描；而且它把「正文里恰好提到该词」的卡片也算作关联，正是审计指出的
+    「假弱项」来源。
     """
     points = [normalize_knowledge_point(p) for p in knowledge_points]
     points = list(dict.fromkeys(p for p in points if p))
     if not points:
         return {}
 
-    conditions = []
-    for point in points:
-        # 转义 %/_：否则知识点里出现 % 会匹配全部卡片，制造假薄弱点并全表扫描
-        pattern, escape = like_contains(point)
-        conditions.append(Card.front.ilike(pattern, escape=escape))
-        conditions.append(Card.back.ilike(pattern, escape=escape))
-        for key in (KEY_SUBJECTS, KEY_CHAPTERS, KEY_POINT_TYPES):
-            conditions.append(
-                func.json_contains(Card.tags[key], json.dumps(point, ensure_ascii=False))
-            )
-            conditions.append(cast(Card.tags[key], String).ilike(pattern, escape=escape))
-
-    rows = db.execute(
-        select(Card.id, Card.front, Card.back, Card.tags).where(
-            Card.user_id == user_id, or_(*conditions)
-        )
-    ).all()
+    mode = (settings.related_cards_match_mode or "fallback").lower()
+    if mode not in {"never", "fallback", "always"}:
+        mode = "fallback"
 
     result: dict[str, set[int]] = {point: set() for point in points}
-    for card_id, front, back, tags in rows:
-        for point in points:
-            if _card_matches_point(front or "", back or "", tags, point):
-                result[point].add(int(card_id))
+
+    def _collect(points_subset: Sequence[str], *, fuzzy: bool, exact: bool) -> None:
+        conditions = []
+        for point in points_subset:
+            if exact:
+                conditions.append(_exact_tag_condition(point))
+            if fuzzy:
+                conditions.extend(_fuzzy_conditions(point))
+        if not conditions:
+            return
+        rows = db.execute(
+            select(Card.id, Card.front, Card.back, Card.tags).where(
+                Card.user_id == user_id, or_(*conditions)
+            )
+        ).all()
+        for card_id, front, back, tags in rows:
+            for point in points_subset:
+                if _card_matches_point(front or "", back or "", tags, point, fuzzy=fuzzy):
+                    result[point].add(int(card_id))
+
+    if mode == "always":
+        _collect(points, fuzzy=True, exact=True)
+        return result
+
+    _collect(points, fuzzy=False, exact=True)
+
+    if mode == "fallback":
+        missing = [point for point in points if not result[point]]
+        if missing:
+            # 仅在「标签完全没命中」时才付全表扫描的代价
+            _collect(missing, fuzzy=True, exact=False)
     return result
 
 

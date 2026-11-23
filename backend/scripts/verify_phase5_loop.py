@@ -175,7 +175,17 @@ def main() -> int:
         )
         check("导入成功 (201)", r.status_code == 201, f"status={r.status_code}")
         imported = r.json()
-        print(f"      解析出考点 {imported['points_found']} 条，匹配后端 {imported['embedding_backend']}")
+        print(
+            f"      解析出考点 {imported['points_found']} 条，"
+            f"重复合并 {imported.get('duplicates_skipped', 0)} 条，"
+            f"匹配后端 {imported['embedding_backend']}"
+        )
+        # 去重合并：同一考点重复出现时只保留一行（本轮新增行为）
+        check(
+            "重复考点已合并（duplicates_skipped 已上报）",
+            "duplicates_skipped" in imported,
+            f"{imported.get('duplicates_skipped', 0)} 条",
+        )
         for f in imported["findings"]:
             mark = "✓" if f["matched"] else "✗"
             print(f"        {mark} {f['point_text'][:22]:24} -> {f['matched_knowledge_point'] or '（未匹配）'}"
@@ -274,7 +284,12 @@ def main() -> int:
             points = db.execute(select(ExamPoint).where(ExamPoint.user_id == user_id)).scalars().all()
             cards = db.execute(select(Card).where(Card.user_id == user_id)).scalars().all()
         print(f"      考点 {len(points)} 条，卡片 {len(cards)} 张")
-        check("考点已写入 MySQL", len(points) >= 6, f"{len(points)} 条")
+        # 原文里的重复考点会被合并，因此不再断言固定条数
+        check(
+            "考点已写入 MySQL（重复已合并）",
+            len(points) >= 5 and len(points) <= 6,
+            f"{len(points)} 条",
+        )
         check("三级优先级都已落库",
               {p.priority for p in points} >= {"高危", "巩固"})
         check("未匹配考点的知识点为空",

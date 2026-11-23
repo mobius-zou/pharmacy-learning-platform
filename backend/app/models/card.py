@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, Float, ForeignKey, Integer, Text
+from sqlalchemy import JSON, Computed, Float, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..database import Base
@@ -36,6 +36,16 @@ class Card(Base):
     front: Mapped[str] = mapped_column(Text, nullable=False)
     back: Mapped[str] = mapped_column(Text, nullable=False)
     tags: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=empty_tags)
+    # 生成列：把 chapters 数组抽出来，供**多值索引**（MySQL 8.0.17+）使用。
+    # 为什么需要它：卡片→知识点的关联查询要按 chapters 做成员匹配，
+    # 而 JSON_EXTRACT 的常规写法用不上索引（实测见 scripts/bench_exam_match_index.py：
+    # 命中索引 5.7ms vs 全表扫描 32.7ms）。生成列让谓词退化为普通列上的
+    # JSON_CONTAINS，从而能被优化器识别。
+    chapters_json: Mapped[Any | None] = mapped_column(
+        JSON,
+        Computed("JSON_EXTRACT(tags,'$.chapters')", persisted=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
 
     # --- FSRS 调度状态（naive UTC 存储）---

@@ -1,6 +1,7 @@
 """ORM 模型：users / cards / review_logs / wrong_questions / knowledge_graph / experiments / exam_points。"""
 
 from .card import Card
+from .idempotency import IdempotencyRecord
 from .exam_point import (
     PRIORITIES,
     PRIORITY_CONFIRM,
@@ -40,6 +41,7 @@ __all__ = [
     "EXPERIMENT_SYNTHESIS",
     "EXPERIMENT_TYPES",
     "ExamPoint",
+    "IdempotencyRecord",
     "Experiment",
     "KnowledgeGraph",
     "PRIORITIES",

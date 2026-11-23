@@ -65,13 +65,28 @@ jobs:
         working-directory: backend
         run: pytest tests/ -q
 
+  # 阻塞的静态门禁：ruff 棘轮规则集（见 backend/ruff.toml 与 docs/audit-fix/lint-baseline.md）
+  # 只启用当前 100% 通过的规则，拦住「未定义名称 / 语法错误」这类会直接 500 的问题。
+  lint-blocking:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: ruff（棘轮规则集）
+        working-directory: backend
+        run: |
+          python -m pip install ruff
+          ruff check app
+
   lint-advisory:
-    # 【为什么是 advisory】仓库此前从未跑过 ruff/mypy/bandit（审计 H8），
-    # 存量告警数量未知。直接设为阻塞会让 CI 从第一天起就红灯，
-    # 反而促使别人绕过门禁。因此：
-    #   · 阻塞门禁放在 test job（语法编译 + 全量测试 + 空库迁移 + alembic check）；
-    #   · 本 job 只**报告**静态分析与依赖漏洞，持续可见但不阻断。
-    # 清理完存量后，把下面这行删掉即升级为阻塞。
+    # 【为什么是 advisory】存量基线见 docs/audit-fix/lint-baseline.md：
+    #   mypy 14 条、bandit 6 条（0 HIGH）、pip-audit 本机无法采集。
+    # 直接阻塞会让 CI 从第一天起红灯，反而促使别人绕过门禁。因此：
+    #   · 阻塞门禁 = test job + lint-blocking job（ruff 棘轮规则集）；
+    #   · 本 job 只**报告** mypy/bandit/依赖漏洞，持续可见但不阻断。
+    # 存量清零后删除下面这行即升级为阻塞（升级路径见基线文档）。
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -79,11 +94,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - name: ruff / mypy / bandit / pip-audit
+      - name: mypy / bandit / pip-audit（仅报告）
         working-directory: backend
         run: |
-          python -m pip install ruff mypy bandit pip-audit
-          ruff check app
+          python -m pip install mypy bandit pip-audit
           mypy app --ignore-missing-imports
           bandit -r app -q
-          pip-audit -r requirements.txt
+          pip-audit -r requirements.txt \
+            --extra-index-url https://download.pytorch.org/whl/cpu

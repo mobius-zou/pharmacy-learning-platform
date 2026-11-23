@@ -130,8 +130,8 @@ def test_draft_lifecycle() -> None:
     assert updated is not None
     assert updated.payload["edited"] is True
 
-    confirmed = kg_service.set_draft_status(draft.draft_id, 101, kg_service.DRAFT_CONFIRMED)
-    assert confirmed is not None and confirmed.status == kg_service.DRAFT_CONFIRMED
+    confirmed = kg_service.set_draft_status(draft.draft_id, 101, kg_service.DRAFT_INDEXED)
+    assert confirmed is not None and confirmed.status == kg_service.DRAFT_INDEXED
     assert draft.draft_id not in [
         d.draft_id for d in kg_service.list_drafts(101, status=kg_service.DRAFT_PENDING)
     ]
@@ -148,7 +148,7 @@ def test_draft_is_isolated_between_users() -> None:
     other_id = draft.draft_id + "-does-not-matter"
     assert kg_service.get_draft(draft.draft_id, 202) is None
     assert kg_service.update_draft(draft.draft_id, 202, note="hack") is None
-    assert kg_service.set_draft_status(draft.draft_id, 202, kg_service.DRAFT_CONFIRMED) is None
+    assert kg_service.set_draft_status(draft.draft_id, 202, kg_service.DRAFT_INDEXED) is None
     assert kg_service.delete_draft(draft.draft_id, 202) is False
     assert other_id  # 仅避免未使用告警
 

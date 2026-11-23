@@ -187,7 +187,7 @@ class PubMedClient:
 
         # 检索词可能包含受试者信息或未公开课题名，日志里只留长度与短哈希，
         # 既能关联重复检索，又不落明文（审计 M16）。
-        digest = hashlib.sha1(query.strip().encode("utf-8")).hexdigest()[:8]
+        digest = hashlib.sha1(query.strip().encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
         logger.info(
             "PubMed 检索（关键词 %d 字符，摘要 %s）命中 %s 条，返回 %s 条",
             len(query.strip()),

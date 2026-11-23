@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+import json
+
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.orm import Session
 
 from ...database import get_db
 from ...deps import api_guard, get_current_user
-from ...errors import NotFoundError, ValidationError
+from ...errors import ConflictError, NotFoundError, ValidationError
 from ...logging_config import get_logger
 from ...models import Card, User
 from ...schemas import (
@@ -19,7 +21,7 @@ from ...schemas import (
     ReviewLogOut,
     ReviewPreviewResponse,
 )
-from ...services import card_service
+from ...services import card_service, idempotency_service
 from ...services import wrong_question_service as wq_service
 from ...services.review_service import (
     VALID_RATINGS,
@@ -119,10 +121,43 @@ def preview_card(
 def grade_card(
     card_id: int,
     payload: GradeRequest,
+    response: Response,
+    idempotency_key: str | None = Header(
+        default=None,
+        alias="Idempotency-Key",
+        max_length=200,
+        description="客户端生成的幂等键；同一键重复提交只生效一次",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> GradeResponse:
-    """核心闭环：评分 → 更新 stability/difficulty/due/last_review + 写复习日志。"""
+) -> GradeResponse | Response:
+    """核心闭环：评分 → 更新 stability/difficulty/due/last_review + 写复习日志。
+
+    幂等：客户端因网络超时重发时带上同一个 ``Idempotency-Key``，
+    服务端直接返回首次结果，**不会**把 FSRS 推进两次。
+    """
+    fingerprint = idempotency_service.fingerprint_of(
+        {"card_id": card_id, "rating": payload.rating,
+         "reviewed_at": payload.reviewed_at, "elapsed_days": payload.elapsed_days}
+    )
+    endpoint = "POST /review/{card_id}/grade"
+
+    if idempotency_key:
+        existing = idempotency_service.get_record(db, current_user.id, idempotency_key)
+        if existing is not None:
+            if existing.fingerprint != fingerprint:
+                raise ConflictError(
+                    "该 Idempotency-Key 已用于不同的评分请求",
+                    detail={"idempotency_key": idempotency_key},
+                )
+            logger.info("幂等重放 card_id=%s key=%s", card_id, idempotency_key)
+            return Response(
+                content=json.dumps(existing.payload, ensure_ascii=False),
+                status_code=existing.status_code,
+                media_type="application/json",
+                headers={"Idempotent-Replay": "true"},
+            )
+
     card = _get_owned_card(db, current_user, card_id)
     try:
         card, result = card_service.grade_card(
@@ -135,7 +170,7 @@ def grade_card(
     except ValueError as exc:
         # 补录时间不合法等业务校验 → 422（而不是被 api_guard 兜成 500）
         raise ValidationError(str(exc)) from exc
-    return GradeResponse(
+    result_response = GradeResponse(
         card=CardOut.model_validate(card),
         rating=result.rating,
         rating_label=result.rating_label,
@@ -145,6 +180,21 @@ def grade_card(
         due=result.due,
         retrievability=result.retrievability,
     )
+
+    if idempotency_key:
+        idempotency_service.remember(
+            db,
+            current_user.id,
+            idempotency_key,
+            endpoint,
+            fingerprint,
+            status.HTTP_200_OK,
+            result_response.model_dump(mode="json"),
+        )
+        idempotency_service.purge_expired(db, current_user.id)
+        response.headers["Idempotent-Replay"] = "false"
+
+    return result_response
 
 
 @router.get(

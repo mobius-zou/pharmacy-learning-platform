@@ -54,3 +54,14 @@
 2026-11-22 17:13 | CI python版本与本机不一致/lint静默通过 | CI升到3.14+阻塞语法编译检查+lint改名advisory并注明原因 | 已完成
 2026-11-22 17:13 | M15 未说明单进程限制 | README新增部署形态与三处进程内单例说明 | 已完成
 2026-11-22 17:13 | 本轮汇总 | P0-1..P1-6 | 663通过0跳过·五脚本24/26/29/35/31·冒烟OK
+2026-11-23 21:01 | R1 考点同文本重复导入未去重 | 判重键(NFKC+trim+lower+压缩空白)在匹配/LLM前生效·库内同键合并·响应加duplicates_skipped·唯一约束+迁移回填 | 已完成·19项回归·迁移含重复数据验证
+2026-11-23 21:01 | R2 Chroma/MySQL确认流程无补偿 | 改状态机pending→indexing→indexed·先置indexing再写库·启动扫indexing幂等重放·历史confirmed读取映射 | 已完成·12项回归
+2026-11-23 21:01 | R3 跨秒双击评分可重复推进FSRS | 新增Idempotency-Key(同键重放返回首次结果/同键异体409/TTL清理)·UI加原生dialog确认弹窗+重试复用键 | 已完成·8项回归
+2026-11-23 21:01 | R4 C2两套向量空间边界模糊 | 保持两套·新增SPACE常量与允许后端集合·集合元数据记录embedding_space·11项边界断言 | 已完成(显式化)
+2026-11-23 21:01 | R5 H6卡片知识点关联全表扫描 | 基准实测:32.7ms→5.7ms·生成列chapters_json+多值索引·策略never/fallback/always默认fallback | 已完成·6.02×
+2026-11-23 21:01 | R6 OCR批量导入无并发限制 | 信号量闸门(默认2)+有界排队+繁忙返回503 ocr_busy·capabilities上报concurrency·保留安装指引 | 已完成·7项回归
+2026-11-23 21:01 | R7 lint从未跑过无法决策 | 安装ruff/mypy/bandit/pip-audit跑基线·bandit HIGH 3→0·ruff棘轮规则集(E9,F63,F7,F82)转阻塞 | 已完成·基线见lint-baseline.md
+2026-11-23 21:01 | R7b pip-audit无法采集 | 本机到pypi.org超时且镜像无torch+cpu | 记录命令待联网环境执行
+2026-11-23 21:01 | R8 OCR独立进程/队列 | 暂缓·原因与重启步骤写入TODO-deferred.md | 已记录
+2026-11-23 21:01 | R9 启动告警噪声(CSP/集合签名) | modify排除hnsw:*参数使补签名成功 | 已修复
+2026-11-23 21:01 | 本轮汇总 | R1-R7b | 719通过0跳过·五脚本24/26/29/35/32·冒烟OK·alembic check无漂移

@@ -41,6 +41,9 @@ class OCRResult:
     backend: str = ""
     error: str | None = None
     languages: str = ""
+    # 是否因为并发上限而「繁忙」；调用方据此返回 503 + 重试建议，
+    # 而不是把它当成「图片识别失败」（那是客户端问题，422）
+    busy: bool = False
 
 
 @runtime_checkable
@@ -156,6 +159,42 @@ class TesseractOCR:
 _backend: TesseractOCR | None = None
 _backend_lock = threading.Lock()
 
+# --- 并发闸门 -------------------------------------------------------------
+# 每次 OCR 都会起一个 tesseract 子进程。图片批量导入时若不限流，
+# 几十个并发请求会瞬间打满 CPU，反而让所有接口变慢。
+# 这里用信号量限流 + 有界排队：排队超时则明确返回「繁忙」，而不是无限等待。
+_ocr_slots: threading.BoundedSemaphore | None = None
+_slots_lock = threading.Lock()
+_ocr_waiting = 0
+_waiting_lock = threading.Lock()
+
+
+def _slots() -> threading.BoundedSemaphore:
+    global _ocr_slots
+    if _ocr_slots is None:
+        with _slots_lock:
+            if _ocr_slots is None:
+                from .config import settings
+
+                _ocr_slots = threading.BoundedSemaphore(settings.ocr_max_concurrency)
+    return _ocr_slots
+
+
+def reset_ocr_slots(limit: int | None = None) -> None:
+    """重建并发闸门（测试用；运行时不调用）。"""
+    global _ocr_slots
+    with _slots_lock:
+        _ocr_slots = threading.BoundedSemaphore(limit or 1)
+
+
+def ocr_load() -> dict[str, int]:
+    """当前 OCR 排队情况（供 capabilities 上报）。"""
+    from .config import settings
+
+    with _waiting_lock:
+        waiting = _ocr_waiting
+    return {"max_concurrency": settings.ocr_max_concurrency, "waiting": waiting}
+
 
 def get_ocr_backend() -> TesseractOCR:
     """当前 OCR 后端（进程内单例，加锁）。"""
@@ -184,6 +223,7 @@ def ocr_status() -> dict[str, Any]:
         "default_languages": DEFAULT_LANGUAGES,
         "max_image_bytes": MAX_IMAGE_BYTES,
         "alternatives": ["text", "txt_file"],
+        "concurrency": ocr_load(),
     }
     if not available:
         status["reason"] = backend.reason
@@ -195,7 +235,13 @@ def ocr_status() -> dict[str, Any]:
 
 
 def extract_text_from_image(image_bytes: bytes, languages: str = DEFAULT_LANGUAGES) -> OCRResult:
-    """识别图片文本；后端不可用时返回 ``ok=False`` 而不是抛异常。"""
+    """识别图片文本；后端不可用时返回 ``ok=False`` 而不是抛异常。
+
+    并发受 ``OCR_MAX_CONCURRENCY`` 限制：超出名额时最多排队
+    ``OCR_QUEUE_TIMEOUT_SECONDS`` 秒，仍拿不到名额则返回明确的「繁忙」结果。
+    """
+    global _ocr_waiting
+
     if len(image_bytes) > MAX_IMAGE_BYTES:
         return OCRResult(
             ok=False,
@@ -203,4 +249,31 @@ def extract_text_from_image(image_bytes: bytes, languages: str = DEFAULT_LANGUAG
         )
     if not image_bytes:
         return OCRResult(ok=False, error="图片内容为空")
-    return get_ocr_backend().extract_text(image_bytes, languages=languages)
+
+    from .config import settings
+
+    slots = _slots()
+    with _waiting_lock:
+        _ocr_waiting += 1
+    try:
+        acquired = slots.acquire(timeout=settings.ocr_queue_timeout_seconds)
+    finally:
+        with _waiting_lock:
+            _ocr_waiting -= 1
+
+    if not acquired:
+        logger.warning("OCR 繁忙：并发已达上限 %s，排队等待超时", settings.ocr_max_concurrency)
+        return OCRResult(
+            ok=False,
+            busy=True,
+            backend=get_ocr_backend().name,
+            error=(
+                f"OCR 繁忙（并发上限 {settings.ocr_max_concurrency}），"
+                "请稍后重试或改用文本导入"
+            ),
+        )
+
+    try:
+        return get_ocr_backend().extract_text(image_bytes, languages=languages)
+    finally:
+        slots.release()

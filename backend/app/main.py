@@ -80,6 +80,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for problem in validate_settings(settings):
         logger.error("配置问题：%s", problem)
 
+    # 崩溃恢复：扫描卡在 indexing 的草稿并重放写库（幂等）。
+    # 放在配置/权限检查之后、且**失败不影响启动**。
+    if settings.database_url:
+        try:
+            from .database import session_scope
+            from .services import kg_service
+
+            with session_scope() as db:
+                recovered = kg_service.recover_indexing_drafts(db)
+            if recovered:
+                logger.warning("启动恢复：已重放 %d 份 indexing 草稿", recovered)
+        except Exception:
+            logger.warning("启动恢复 indexing 草稿失败（不影响服务启动）", exc_info=True)
+
     if not settings.database_url:
         logger.error(
             "DATABASE_URL 未配置，数据库功能不可用。"
