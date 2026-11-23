@@ -18,9 +18,9 @@
 
 | 工具 | 存量 | 本轮处理后 | CI 地位 |
 | --- | --- | --- | --- |
-| ruff（默认规则集） | **213** 条 | 213（未清理，见下） | advisory |
+| ruff（默认规则集） | **212** 条 | 212（未清理，见下） | **棘轮守卫（阻塞）** |
 | ruff（棘轮规则集 `E9,F63,F7,F82`） | 1 条（`F821 Undefined name Any`） | **0** | **阻塞门禁** |
-| mypy | **14** errors / 9 files | 14 | advisory |
+| mypy | **13** errors / 9 files | 13 | **棘轮守卫（阻塞）** |
 | bandit | 9（**3 HIGH**） | **6（0 HIGH）** | advisory |
 | pip-audit | 无法采集 | 无法采集（本机网络到 pypi.org 不通） | advisory |
 
@@ -45,7 +45,7 @@
 （`db: Session = Depends(get_db)`），属于需要 per-file-ignore 或换规则的噪音，
 不宜按条修改。
 
-### mypy 14 条（按文件）
+### mypy 13 条（按文件）
 
 分布在 9 个文件，主要是 SQLAlchemy `Result` 行解包的类型推断、以及
 `list[dict]` 传给 `list[BaseModel]` 的位置。修复需要逐个补 `cast`/`TypedDict`，
@@ -102,7 +102,21 @@ exclude = ["alembic/versions", "scripts"]
 （真正会在运行时抛 `NameError`）。本轮它就抓到一个真实缺陷：
 `wrong_question_service.py` 里用了 `Any` 却没导入（在 H6 改造中引入）。
 
-**仍为 advisory**：mypy（14 条）、bandit 剩余 6 条、pip-audit。
+**存量棘轮守卫（阻塞）**：`scripts/check_lint_baseline.py` 会实际运行
+
+```bash
+ruff check app --isolated --statistics    # 默认规则集，当前 212
+mypy app --ignore-missing-imports         # 当前 13
+```
+
+并与 `backend/lint-baseline.json` 比较：**当前数 > 基线即失败**（列出超出的
+规则/文件），**当前数 < 基线则提示 `--update` 收紧**。这样存量即使一时清不完，
+也保证不会继续变多。
+
+> 注意：ruff 必须带 `--isolated`。项目 `ruff.toml` 只启用棘轮规则集，
+> 数出来是 0；若基线误用项目配置，守卫会永远通过。已有测试锁定这一点。
+
+**仍为 advisory**：bandit 剩余 6 条、pip-audit（本机无法采集）。
 原因：它们的存量需要逐条改代码而不是改配置，直接阻塞会让 CI 立刻红灯。
 
 **升级路径（只增不减）**：

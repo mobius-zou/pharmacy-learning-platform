@@ -1,0 +1,14 @@
+{
+  "_comment": "lint 棘轮基线：当前告警数不得超过这里的值（只减不增）。由 scripts/check_lint_baseline.py 校验；明细见 docs/audit-fix/lint-baseline.md",
+  "_measured_at": "2026-11-23",
+  "ruff": {
+    "command": "ruff check app --isolated --statistics",
+    "total": 212,
+    "note": "默认规则集（--isolated 忽略 ruff.toml 的棘轮选择），其中 B008 约 133 条为 FastAPI 依赖注入惯用写法"
+  },
+  "mypy": {
+    "command": "mypy app --ignore-missing-imports",
+    "errors": 13,
+    "note": "主要是 SQLAlchemy Row 解包与 list[dict] -> list[BaseModel] 的类型推断"
+  }
+}

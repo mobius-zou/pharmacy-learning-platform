@@ -42,6 +42,14 @@ pytest tests/ -q            # 默认使用独立 <dbname>_test，全量运行
                             # （唯一跳过项是「仓库提交状态」检查，提交后即通过）
 ```
 
+## 已知取舍
+
+- **卡片↔知识点关联默认 `fallback` 模式，不是全量并集**：标签无命中时才回落正文扫描，
+  详见 [`backend/README.md`](backend/README.md#卡片知识点关联的匹配口径重要)。
+- **只支持单进程部署**（限流/嵌入/Chroma 均为进程内单例）。
+- **两套向量空间并存**（文献用离线哈希、考点匹配优先 sentence-transformers），
+  边界见 `backend/app/embeddings.py` 的 `SPACE_*` 常量。
+
 ## 文档
 
 - [`backend/README.md`](backend/README.md) —— 接口、配置、迁移与运维细节

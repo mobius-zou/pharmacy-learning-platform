@@ -74,11 +74,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.14"
-      - name: ruff（棘轮规则集）
+      - name: ruff（棘轮规则集，0 容忍）
         working-directory: backend
         run: |
           python -m pip install ruff
           ruff check app
+
+      # 存量告警也要守住「只减不增」：当前数量超过 lint-baseline.json 即失败
+      - name: lint 基线守卫（棘轮）
+        working-directory: backend
+        run: |
+          python -m pip install ruff mypy
+          python scripts/check_lint_baseline.py
 
   lint-advisory:
     # 【为什么是 advisory】存量基线见 docs/audit-fix/lint-baseline.md：
